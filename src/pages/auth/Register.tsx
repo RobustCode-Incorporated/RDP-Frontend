@@ -15,6 +15,9 @@ export const Register = () => {
   const [driverPassword, setDriverPassword] = useState('');
   const [driverFirstName, setDriverFirstName] = useState('');
   const [driverLastName, setDriverLastName] = useState('');
+  const [driverPhoneNumber, setDriverPhoneNumber] = useState('');
+  const [driverVehicleType, setDriverVehicleType] = useState('');
+  const [driverVehiclePlate, setDriverVehiclePlate] = useState('');
 
   const [restaurantName, setRestaurantName] = useState('');
   const [restaurantDescription, setRestaurantDescription] = useState('');
@@ -58,6 +61,9 @@ export const Register = () => {
           password: driverPassword,
           firstName: driverFirstName,
           lastName: driverLastName,
+          phoneNumber: driverPhoneNumber,
+          vehicleType: driverVehicleType,
+          vehiclePlate: driverVehiclePlate,
           role: 'DRIVER',
         });
       } else {
@@ -150,6 +156,36 @@ export const Register = () => {
                   type="password"
                   value={driverPassword}
                   onChange={(e) => setDriverPassword(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
+                  required
+                />
+              </div>
+              <div>
+                <label className="font-semibold mb-1 text-[#333] block">Téléphone</label>
+                <input
+                  type="text"
+                  value={driverPhoneNumber}
+                  onChange={(e) => setDriverPhoneNumber(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
+                  required
+                />
+              </div>
+              <div>
+                <label className="font-semibold mb-1 text-[#333] block">Type de véhicule</label>
+                <input
+                  type="text"
+                  value={driverVehicleType}
+                  onChange={(e) => setDriverVehicleType(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
+                  required
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="font-semibold mb-1 text-[#333] block">Plaque du véhicule</label>
+                <input
+                  type="text"
+                  value={driverVehiclePlate}
+                  onChange={(e) => setDriverVehiclePlate(e.target.value)}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
                   required
                 />
