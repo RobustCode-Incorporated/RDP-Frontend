@@ -43,50 +43,13 @@ const timelineSteps: Array<{ status: DriverDeliveryDto['status']; label: string 
   { status: 'DELIVERED', label: 'Livrée' },
 ];
 
-const demoDeliveries: DriverDeliveryDto[] = [
-  {
-    id: 8101,
-    pickupAddress: 'Restaurant Centre - Plateau',
-    deliveryAddress: 'Cocody, Rue des Jardins',
-    description: 'Menu midi',
-    status: 'ASSIGNED',
-    createdAt: '2026-07-15T08:05:00',
-    updatedAt: null,
-    restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-    customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-    driver: { id: 11 },
-  },
-  {
-    id: 8102,
-    pickupAddress: 'Restaurant Centre - Plateau',
-    deliveryAddress: 'Marcory Zone 4',
-    description: 'Commande soir',
-    status: 'PICKED_UP',
-    createdAt: '2026-07-15T07:45:00',
-    updatedAt: '2026-07-15T08:00:00',
-    restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-    customer: { id: 402, firstName: 'Jean', lastName: 'L.', email: 'jean@example.com' },
-    driver: { id: 11 },
-  },
-  {
-    id: 8103,
-    pickupAddress: 'Restaurant Centre - Plateau',
-    deliveryAddress: 'Bingerville centre',
-    description: 'Commande express',
-    status: 'IN_TRANSIT',
-    createdAt: '2026-07-15T07:10:00',
-    updatedAt: '2026-07-15T07:55:00',
-    restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-    customer: { id: 403, firstName: 'Awa', lastName: 'S.', email: 'awa@example.com' },
-    driver: { id: 11 },
-  },
-];
-
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 
 const mapStatus = (status: DriverDeliveryDto['status']) => {
   switch (status) {
+    case 'PENDING':
+      return 'En attente';
     case 'ASSIGNED':
       return 'Affectée';
     case 'PICKED_UP':
@@ -154,10 +117,10 @@ export const DriverDashboard = () => {
 
     try {
       const response = await fetchMyDeliveries();
-      setDeliveries(response.length > 0 ? response : demoDeliveries);
+      setDeliveries(response);
 
       if (response.length === 0) {
-        setLoadMessage('Aucune livraison assignée pour le moment, les données de démonstration sont affichées.');
+        setLoadMessage('Aucune livraison assignée pour le moment.');
       }
     } catch (error) {
       if (!(error instanceof Error)) {
@@ -165,9 +128,9 @@ export const DriverDashboard = () => {
         return;
       }
 
-      setDeliveries(demoDeliveries);
-      setLoadError('Impossible de charger les livraisons du chauffeur. Les données de démonstration sont affichées.');
-      toast.error('Chargement chauffeur indisponible. Données de démonstration activées.');
+      setDeliveries([]);
+      setLoadError('Impossible de charger les livraisons du chauffeur.');
+      toast.error('Chargement chauffeur indisponible.');
     } finally {
       setIsLoading(false);
     }

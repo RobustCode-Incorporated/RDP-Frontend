@@ -22,7 +22,6 @@ type RestaurantOrderSummary = {
   statusLabel: string;
   totalAmountLabel: string;
   createdAtLabel: string;
-  createdAtValue: string;
   restaurantId: number;
 };
 
@@ -45,13 +44,6 @@ const workflowSteps: Array<{ status: RestaurantOrderDto['status']; label: string
   { status: 'READY_FOR_PICKUP', label: 'Prête pour pickup' },
   { status: 'PICKED_UP', label: 'Récupérée par le chauffeur' },
   { status: 'DELIVERED', label: 'Livrée' },
-];
-
-const demoOrders: RestaurantOrderDto[] = [
-  { id: 7001, restaurantId: 10, customerId: 401, driverId: null, status: 'PENDING', totalAmount: '25000', createdAt: '2026-07-15T07:35:00' },
-  { id: 7002, restaurantId: 10, customerId: 402, driverId: null, status: 'ACCEPTED', totalAmount: '18000', createdAt: '2026-07-15T07:12:00' },
-  { id: 7003, restaurantId: 10, customerId: 403, driverId: 11, status: 'PREPARING', totalAmount: '12450', createdAt: '2026-07-15T06:58:00' },
-  { id: 7004, restaurantId: 10, customerId: 404, driverId: 11, status: 'READY_FOR_PICKUP', totalAmount: '32000', createdAt: '2026-07-15T06:42:00' },
 ];
 
 const formatMoney = (value: string) => {
@@ -142,29 +134,6 @@ const getHistoryLabel = (status: RestaurantOrderDto['status']) => {
   }
 };
 
-const buildFallbackHistory = (summary: RestaurantOrderSummary | null): RestaurantOrderHistoryDto[] => {
-  if (!summary) {
-    return [];
-  }
-
-  const timeline: RestaurantOrderDto['status'][] = ['PENDING', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'DELIVERED'];
-  const currentIndex = timeline.indexOf(summary.statusCode);
-  const relevantStatuses = timeline.slice(0, currentIndex + 1);
-
-  return relevantStatuses.map((status, index) => {
-    const offsetMinutes = (relevantStatuses.length - index - 1) * 12;
-    const eventTime = new Date(new Date(summary.createdAtValue).getTime() + offsetMinutes * 60_000).toISOString();
-
-    return {
-      id: summary.id * 10 + index,
-      oldStatus: index === 0 ? null : relevantStatuses[index - 1],
-      newStatus: status,
-      changedBy: index === 0 ? 'Client de démonstration' : status === 'READY_FOR_PICKUP' ? 'Cuisine de démonstration' : 'Système de démonstration',
-      createdAt: eventTime,
-    };
-  });
-};
-
 export const RestaurantDashboard = () => {
   const { user } = useAuthStore();
   const toast = useToast();
@@ -188,10 +157,10 @@ export const RestaurantDashboard = () => {
 
     try {
       const response = await fetchRestaurantOrders();
-      setOrders(response.length > 0 ? response : demoOrders);
+      setOrders(response);
 
       if (response.length === 0) {
-        setLoadMessage('Aucune commande n’est disponible pour le moment, les données de démonstration sont affichées.');
+        setLoadMessage('Aucune commande n’est disponible pour le moment.');
       }
     } catch (error) {
       if (!(error instanceof Error)) {
@@ -199,9 +168,9 @@ export const RestaurantDashboard = () => {
         return;
       }
 
-      setOrders(demoOrders);
-      setLoadError('Impossible de charger les commandes du restaurant. Les données de démonstration sont affichées.');
-      toast.error('Chargement restaurant indisponible. Données de démonstration activées.');
+      setOrders([]);
+      setLoadError('Impossible de charger les commandes du restaurant.');
+      toast.error('Chargement restaurant indisponible.');
     } finally {
       setIsLoading(false);
     }
@@ -220,7 +189,6 @@ export const RestaurantDashboard = () => {
       statusLabel: mapStatus(order.status),
       totalAmountLabel: formatMoney(order.totalAmount),
       createdAtLabel: formatDateTime(order.createdAt),
-      createdAtValue: order.createdAt,
       restaurantId: order.restaurantId,
     }));
   }, [orders]);
@@ -265,8 +233,8 @@ export const RestaurantDashboard = () => {
         }
 
         if (response.length === 0) {
-          setSelectedHistory(buildFallbackHistory(selectedSummary));
-          setHistoryError('Aucun historique n’est renvoyé par le backend, l’historique de démonstration est affiché.');
+          setSelectedHistory([]);
+          setHistoryError('Aucun historique de statut n’est renvoyé par le backend.');
           return;
         }
 
@@ -281,8 +249,8 @@ export const RestaurantDashboard = () => {
           return;
         }
 
-        setSelectedHistory(buildFallbackHistory(selectedSummary));
-        setHistoryError('Impossible de charger l’historique du statut. L’historique de démonstration est affiché.');
+        setSelectedHistory([]);
+        setHistoryError('Impossible de charger l’historique du statut.');
       } finally {
         if (isActive) {
           setHistoryLoading(false);
@@ -295,7 +263,7 @@ export const RestaurantDashboard = () => {
     return () => {
       isActive = false;
     };
-  }, [selectedOrder?.id, selectedSummary?.createdAtValue, selectedSummary?.statusCode]);
+  }, [selectedOrder?.id, selectedSummary?.statusCode]);
 
   const selectedWorkflowIndex = selectedSummary
     ? workflowSteps.findIndex((step) => step.status === selectedSummary.statusCode)

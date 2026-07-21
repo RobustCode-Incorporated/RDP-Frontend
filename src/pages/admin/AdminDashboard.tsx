@@ -66,85 +66,6 @@ const menuItems = [
   { id: 'orders', label: 'Commandes' },
 ];
 
-const demoRestaurants: AdminRestaurantDto[] = [
-  {
-    id: 1,
-    name: 'Au Bois d’Ébène - Centre',
-    description: 'Cuisine centrale',
-    phoneNumber: '+22501010101',
-    email: 'centre@auboisdebene.ci',
-    address: 'Plateau, Rue des Jardins',
-    city: 'Abidjan',
-    country: 'Côte d’Ivoire',
-    status: 'ACTIVE',
-  },
-  {
-    id: 2,
-    name: 'Au Bois d’Ébène - Riviera',
-    description: 'Point de vente Riviera',
-    phoneNumber: '+22502020202',
-    email: 'riviera@auboisdebene.ci',
-    address: 'Riviera 3, Boulevard Latrille',
-    city: 'Abidjan',
-    country: 'Côte d’Ivoire',
-    status: 'ACTIVE',
-  },
-  {
-    id: 3,
-    name: 'Au Bois d’Ébène - Cocody',
-    description: 'Point de vente Cocody',
-    phoneNumber: '+22503030303',
-    email: 'cocody@auboisdebene.ci',
-    address: 'Cocody Angré, 7e Tranche',
-    city: 'Abidjan',
-    country: 'Côte d’Ivoire',
-    status: 'INACTIVE',
-  },
-];
-
-const demoDrivers: AdminDriverDto[] = [
-  {
-    id: 1,
-    userId: 101,
-    firstName: 'Koffi',
-    lastName: 'A.',
-    email: 'koffi@example.com',
-    phoneNumber: '+22507070707',
-    vehicleType: 'Moto',
-    vehiclePlate: '1234 AB 01',
-    availabilityStatus: 'AVAILABLE',
-  },
-  {
-    id: 2,
-    userId: 102,
-    firstName: 'Awa',
-    lastName: 'B.',
-    email: 'awa@example.com',
-    phoneNumber: '+22508080808',
-    vehicleType: 'Scooter',
-    vehiclePlate: '5678 CD 02',
-    availabilityStatus: 'BUSY',
-  },
-  {
-    id: 3,
-    userId: 103,
-    firstName: 'Serge',
-    lastName: 'C.',
-    email: 'serge@example.com',
-    phoneNumber: '+22509090909',
-    vehicleType: 'Moto',
-    vehiclePlate: '9012 EF 03',
-    availabilityStatus: 'OFFLINE',
-  },
-];
-
-const demoOrders: AdminOrderDto[] = [
-  { id: 2041, restaurantId: 1, customerId: 301, driverId: null, status: 'PENDING', totalAmount: '28000', createdAt: '2026-07-15T07:30:00' },
-  { id: 2042, restaurantId: 2, customerId: 302, driverId: 2, status: 'PREPARING', totalAmount: '15500', createdAt: '2026-07-15T07:10:00' },
-  { id: 2043, restaurantId: 1, customerId: 303, driverId: 1, status: 'PICKED_UP', totalAmount: '19000', createdAt: '2026-07-15T06:50:00' },
-  { id: 2044, restaurantId: 3, customerId: 304, driverId: null, status: 'DELIVERED', totalAmount: '12500', createdAt: '2026-07-15T06:20:00' },
-];
-
 const statusBadgeClasses: Record<string, string> = {
   ACTIVE: 'bg-emerald-100 text-emerald-700',
   INACTIVE: 'bg-slate-200 text-slate-700',
@@ -175,6 +96,16 @@ const formatDateTime = (value: string) =>
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+
+const getLastSyncLabel = (relatedOrders: AdminOrderDto[]) => {
+  const latestOrder = relatedOrders[0];
+
+  if (!latestOrder?.createdAt) {
+    return 'Non disponible';
+  }
+
+  return formatDateTime(latestOrder.createdAt);
+};
 
 const mapRestaurantStatus = (status: AdminRestaurantDto['status']) =>
   status === 'ACTIVE' ? 'Ouvert' : 'Fermé';
@@ -240,18 +171,18 @@ export const AdminDashboard = () => {
       fetchAdminOrders(),
     ]);
 
-    setRestaurants(restaurantsResult.status === 'fulfilled' ? restaurantsResult.value : demoRestaurants);
-    setDrivers(driversResult.status === 'fulfilled' ? driversResult.value : demoDrivers);
-    setOrders(ordersResult.status === 'fulfilled' ? ordersResult.value : demoOrders);
+    setRestaurants(restaurantsResult.status === 'fulfilled' ? restaurantsResult.value : []);
+    setDrivers(driversResult.status === 'fulfilled' ? driversResult.value : []);
+    setOrders(ordersResult.status === 'fulfilled' ? ordersResult.value : []);
 
     const fallbackCount = [restaurantsResult, driversResult, ordersResult].filter(
       (result) => result.status === 'rejected'
     ).length;
 
     if (fallbackCount === 3) {
-      setLoadError('Impossible de charger les données admin. Les données de démonstration sont affichées.');
+      setLoadError('Impossible de charger les données admin.');
     } else if (fallbackCount > 0) {
-      setLoadMessage('API partiellement indisponible, les données manquantes sont affichées en mode démo.');
+      setLoadMessage('API partiellement indisponible, certaines sections sont vides.');
     }
 
     setIsLoading(false);
@@ -279,7 +210,7 @@ export const AdminDashboard = () => {
         activeOrders: relatedOrders.filter(
           (order) => order.status !== 'DELIVERED' && order.status !== 'CANCELLED'
         ).length,
-        lastSync: formatDateTime(relatedOrders[0]?.createdAt ?? new Date().toISOString()),
+        lastSync: getLastSyncLabel(relatedOrders),
       };
     });
   }, [orders, restaurants]);

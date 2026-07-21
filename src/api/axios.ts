@@ -3,11 +3,12 @@ import axios from 'axios';
 import { useAuthStore } from '../store/useAuthStore';
 
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const normalizedApiBaseUrl = rawApiBaseUrl?.trim();
 const fallbackApiBaseUrl = import.meta.env.DEV
   ? 'http://localhost:8080'
   : 'https://rdp-backend-xr8r.onrender.com';
-const apiBaseUrl = rawApiBaseUrl && rawApiBaseUrl.trim().length > 0
-  ? rawApiBaseUrl.trim()
+const apiBaseUrl = normalizedApiBaseUrl && normalizedApiBaseUrl.length > 0 && (import.meta.env.DEV || !normalizedApiBaseUrl.startsWith('/'))
+  ? normalizedApiBaseUrl
   : fallbackApiBaseUrl;
 
 export const api = axios.create({
