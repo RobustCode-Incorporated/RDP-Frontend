@@ -10,6 +10,8 @@ export interface AdminRestaurantDto {
   city: string | null;
   country: string | null;
   status: 'ACTIVE' | 'INACTIVE';
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface AdminDriverDto {
@@ -22,6 +24,8 @@ export interface AdminDriverDto {
   vehicleType: string;
   vehiclePlate: string;
   availabilityStatus: 'AVAILABLE' | 'BUSY' | 'OFFLINE';
+  currentLatitude?: number | null;
+  currentLongitude?: number | null;
 }
 
 export interface AdminOrderDto {

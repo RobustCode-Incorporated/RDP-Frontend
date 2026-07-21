@@ -54,7 +54,7 @@ describe('DriverDashboard', () => {
     expect(await screen.findAllByText('Affectée')).not.toHaveLength(0);
   });
 
-  it('falls back to demo data when loading fails', async () => {
+  it('shows an error and empty state when loading fails', async () => {
     mockedFetchMyDeliveries.mockRejectedValue(new Error('network'));
 
     renderDriverDashboard();
@@ -62,7 +62,7 @@ describe('DriverDashboard', () => {
     expect(
       await screen.findByText(/Impossible de charger les livraisons du chauffeur/i)
     ).toBeInTheDocument();
-    expect(await screen.findByText('Livraison #8101')).toBeInTheDocument();
+    expect(await screen.findByText(/Aucune livraison ne correspond aux critères sélectionnés/i)).toBeInTheDocument();
   });
 
   it('opens the drawer and marks an assigned delivery as picked up', async () => {

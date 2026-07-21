@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/layout/AppShell';
 import { DetailDrawer } from '../../components/shared/DetailDrawer';
+import { AdminLiveMap } from '../../components/shared/AdminLiveMap';
 import {
   assignDriverToOrder,
   fetchAdminDrivers,
@@ -32,6 +33,8 @@ type RestaurantSummary = {
   description: string;
   activeOrders: number;
   lastSync: string;
+  latitude: number | null;
+  longitude: number | null;
 };
 
 type DriverSummary = {
@@ -44,6 +47,8 @@ type DriverSummary = {
   vehicleType: string;
   vehiclePlate: string;
   assignedOrders: number;
+  currentLatitude: number | null;
+  currentLongitude: number | null;
 };
 
 type OrderSummary = {
@@ -155,12 +160,13 @@ export const AdminDashboard = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [loadMessage, setLoadMessage] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [restaurantGeocodeCache, setRestaurantGeocodeCache] = useState<Record<number, { latitude: number; longitude: number }>>({});
 
   useEffect(() => {
     setStatusFilter('all');
   }, [currentTab]);
 
-  const loadAdminData = async () => {
+  const loadAdminData = useCallback(async () => {
     setIsLoading(true);
     setLoadMessage('');
     setLoadError('');
@@ -186,11 +192,17 @@ export const AdminDashboard = () => {
     }
 
     setIsLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     void loadAdminData();
-  }, []);
+
+    const interval = setInterval(() => {
+      void loadAdminData();
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [loadAdminData]);
 
   const restaurantSummaries = useMemo<RestaurantSummary[]>(() => {
     return restaurants.map((restaurant) => {
@@ -211,6 +223,8 @@ export const AdminDashboard = () => {
           (order) => order.status !== 'DELIVERED' && order.status !== 'CANCELLED'
         ).length,
         lastSync: getLastSyncLabel(relatedOrders),
+        latitude: restaurant.latitude ?? null,
+        longitude: restaurant.longitude ?? null,
       };
     });
   }, [orders, restaurants]);
@@ -229,9 +243,130 @@ export const AdminDashboard = () => {
         vehicleType: driver.vehicleType,
         vehiclePlate: driver.vehiclePlate,
         assignedOrders,
+        currentLatitude: driver.currentLatitude ?? null,
+        currentLongitude: driver.currentLongitude ?? null,
       };
     });
   }, [drivers, orders]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const geocodeMissingRestaurants = async () => {
+      const missingRestaurants = restaurantSummaries.filter(
+        (restaurant) =>
+          (restaurant.latitude === null || restaurant.longitude === null)
+          && !restaurantGeocodeCache[restaurant.id]
+      );
+
+      for (const restaurant of missingRestaurants) {
+        const query = [restaurant.address, restaurant.city, restaurant.country].filter(Boolean).join(', ');
+
+        if (!query.trim()) {
+          continue;
+        }
+
+        try {
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`,
+            {
+              headers: {
+                Accept: 'application/json',
+              },
+            }
+          );
+
+          if (!response.ok) {
+            continue;
+          }
+
+          const payload = (await response.json()) as Array<{ lat: string; lon: string }>;
+          const first = payload[0];
+
+          if (!first) {
+            continue;
+          }
+
+          const latitude = Number(first.lat);
+          const longitude = Number(first.lon);
+
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            continue;
+          }
+
+          if (isMounted) {
+            setRestaurantGeocodeCache((current) => ({
+              ...current,
+              [restaurant.id]: { latitude, longitude },
+            }));
+          }
+        } catch {
+          // Best effort geocode fallback; map still works for available points.
+        }
+      }
+    };
+
+    void geocodeMissingRestaurants();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [restaurantGeocodeCache, restaurantSummaries]);
+
+  const liveMapPoints = useMemo(() => {
+    const restaurantPoints = restaurantSummaries
+      .map((restaurant) => {
+        const fallback = restaurantGeocodeCache[restaurant.id];
+        const latitude = restaurant.latitude ?? fallback?.latitude ?? null;
+        const longitude = restaurant.longitude ?? fallback?.longitude ?? null;
+
+        if (latitude === null || longitude === null) {
+          return null;
+        }
+
+        return {
+          id: restaurant.id,
+          kind: 'restaurant' as const,
+          label: restaurant.name,
+          latitude,
+          longitude,
+          statusLabel: restaurant.statusLabel,
+        };
+      })
+      .filter((point): point is NonNullable<typeof point> => Boolean(point));
+
+    const driverPoints = driverSummaries
+      .map((driver) => {
+        if (driver.currentLatitude === null || driver.currentLongitude === null) {
+          return null;
+        }
+
+        return {
+          id: driver.id,
+          kind: 'driver' as const,
+          label: driver.name,
+          latitude: driver.currentLatitude,
+          longitude: driver.currentLongitude,
+          statusLabel: driver.statusLabel,
+        };
+      })
+      .filter((point): point is NonNullable<typeof point> => Boolean(point));
+
+    return [...restaurantPoints, ...driverPoints];
+  }, [driverSummaries, restaurantGeocodeCache, restaurantSummaries]);
+
+  const missingRestaurantsCount = useMemo(
+    () => restaurantSummaries.filter((restaurant) => {
+      const fallback = restaurantGeocodeCache[restaurant.id];
+      return restaurant.latitude === null && restaurant.longitude === null && !fallback;
+    }).length,
+    [restaurantGeocodeCache, restaurantSummaries]
+  );
+
+  const missingDriversCount = useMemo(
+    () => driverSummaries.filter((driver) => driver.currentLatitude === null || driver.currentLongitude === null).length,
+    [driverSummaries]
+  );
 
   const orderSummaries = useMemo<OrderSummary[]>(() => {
     const restaurantLookup = new Map(restaurantSummaries.map((restaurant) => [restaurant.id, restaurant]));
@@ -437,6 +572,26 @@ export const AdminDashboard = () => {
             </div>
           ))}
         </div>
+
+        {currentTab === 'dashboard' ? (
+          <section className="rounded-3xl border border-black/5 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold">Carte live operations</h3>
+                <p className="text-sm text-slate-500">Suivi temps reel des restaurants et des chauffeurs.</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                {liveMapPoints.length} points
+              </span>
+            </div>
+
+            <AdminLiveMap
+              points={liveMapPoints}
+              missingRestaurantsCount={missingRestaurantsCount}
+              missingDriversCount={missingDriversCount}
+            />
+          </section>
+        ) : null}
 
         {currentTab !== 'dashboard' ? (
           <section className="rounded-3xl border border-black/5 bg-white p-4 shadow-sm">

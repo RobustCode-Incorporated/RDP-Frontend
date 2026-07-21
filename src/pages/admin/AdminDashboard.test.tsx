@@ -82,7 +82,7 @@ describe('AdminDashboard', () => {
     expect(screen.getByText('#501')).toBeInTheDocument();
   });
 
-  it('falls back to demo data and shows an error when all requests fail', async () => {
+  it('shows an error and empty sections when all requests fail', async () => {
     mockedFetchAdminRestaurants.mockRejectedValue(new Error('network'));
     mockedFetchAdminDrivers.mockRejectedValue(new Error('network'));
     mockedFetchAdminOrders.mockRejectedValue(new Error('network'));
@@ -90,7 +90,7 @@ describe('AdminDashboard', () => {
     renderAdminDashboard();
 
     expect(await screen.findByText(/Impossible de charger les données admin/i)).toBeInTheDocument();
-    expect(await screen.findAllByText('Au Bois d’Ébène - Centre')).not.toHaveLength(0);
+    expect(await screen.findByText(/Aucun restaurant ne correspond aux critères sélectionnés/i)).toBeInTheDocument();
   });
 
   it('opens the order drawer and assigns an available driver', async () => {
