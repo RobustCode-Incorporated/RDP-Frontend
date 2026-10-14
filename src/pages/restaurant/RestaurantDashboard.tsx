@@ -50,10 +50,10 @@ const formatMoney = (value: string) => {
   const amount = Number.parseFloat(value);
 
   if (Number.isNaN(amount)) {
-    return `${value} FCFA`;
+    return `${value} €`;
   }
 
-  return `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(amount)} FCFA`;
+  return new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' }).format(amount);
 };
 
 const formatDateTime = (value: string) =>
