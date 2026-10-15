@@ -16,6 +16,8 @@ coverage
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
 # Editor directories and files
 .vscode/*
@@ -28,4 +30,6 @@ coverage
 *.sln
 *.sw?
 .vercel
-.env*
+
+# Build outputs
+build
