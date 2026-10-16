@@ -1,363 +1,195 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/layout/AppShell';
-import { DetailDrawer } from '../../components/shared/DetailDrawer';
+import { DeliveryDetailDrawer } from '../../components/shared/DeliveryDetailDrawer';
+import { CancelDeliveryDialog } from '../../components/shared/CancelDeliveryDialog';
+import { ReadyBadge, StatusBadge } from '../../components/shared/StatusBadge';
 import { useToast } from '../../components/feedback/toastContext';
-import { useAuthStore } from '../../store/useAuthStore';
-import { useAsyncError } from '../../hooks/useAsyncError';
+import { usePolling } from '../../hooks/usePolling';
+import { cancelDelivery, fetchMyRestaurant, markDeliveryReady, searchDeliveries } from '../../api/restaurantApi';
+import { getApiErrorMessage, parseApiError } from '../../api/errors';
+import type { Delivery, Restaurant } from '../../api/types';
 import {
-  acceptRestaurantOrder,
-  fetchRestaurantOrders,
-  fetchRestaurantOrderHistory,
-  readyRestaurantOrder,
-  startPreparingRestaurantOrder,
-  type RestaurantOrderHistoryDto,
-  type RestaurantOrderDto,
-} from '../../api/restaurantApi';
+  ACTIVE_DELIVERY_STATUSES,
+  TERMINAL_DELIVERY_STATUSES,
+  canCancel,
+  canMarkReady,
+  getPaymentModeLabel,
+  isActiveStatus,
+} from '../../lib/deliveryStatus';
+import { formatElapsed, formatMoney, formatTime, personName, todayInBrussels } from '../../lib/format';
+import { CreateDeliveryForm } from './CreateDeliveryForm';
 
-type RestaurantOrderSummary = {
-  id: number;
-  customerLabel: string;
-  driverLabel: string;
-  statusCode: RestaurantOrderDto['status'];
-  statusLabel: string;
-  totalAmountLabel: string;
-  createdAtLabel: string;
-  restaurantId: number;
-};
+/** Contract 9.1: restaurant dashboard polls every 15-30 s. */
+export const RESTAURANT_POLL_MS = 15000;
 
-type SelectedOrder = { id: number } | null;
-
-const statusBadgeClasses: Record<string, string> = {
-  PENDING: 'bg-blue-100 text-blue-700',
-  ACCEPTED: 'bg-indigo-100 text-indigo-700',
-  PREPARING: 'bg-amber-100 text-amber-700',
-  READY_FOR_PICKUP: 'bg-fuchsia-100 text-fuchsia-700',
-  PICKED_UP: 'bg-cyan-100 text-cyan-700',
-  DELIVERED: 'bg-emerald-100 text-emerald-700',
-  CANCELLED: 'bg-rose-100 text-rose-700',
-};
-
-const workflowSteps: Array<{ status: RestaurantOrderDto['status']; label: string }> = [
-  { status: 'PENDING', label: 'Nouvelle commande' },
-  { status: 'ACCEPTED', label: 'Commande acceptée' },
-  { status: 'PREPARING', label: 'Préparation en cours' },
-  { status: 'READY_FOR_PICKUP', label: 'Prête pour pickup' },
-  { status: 'PICKED_UP', label: 'Récupérée par le chauffeur' },
-  { status: 'DELIVERED', label: 'Livrée' },
-];
-
-const formatMoney = (value: string) => {
-  const amount = Number.parseFloat(value);
-
-  if (Number.isNaN(amount)) {
-    return `${value} €`;
-  }
-
-  return new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' }).format(amount);
-};
-
-const formatDateTime = (value: string) =>
-  new Intl.DateTimeFormat('fr-FR', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
-
-const mapStatus = (status: RestaurantOrderDto['status']) => {
-  switch (status) {
-    case 'PENDING':
-      return 'En attente';
-    case 'ACCEPTED':
-      return 'Acceptée';
-    case 'PREPARING':
-      return 'Préparation';
-    case 'READY_FOR_PICKUP':
-      return 'Prête pour pickup';
-    case 'PICKED_UP':
-      return 'En livraison';
-    case 'DELIVERED':
-      return 'Livrée';
-    default:
-      return 'Annulée';
-  }
-};
-
-const getAvailableActionLabel = (status: RestaurantOrderDto['status']) => {
-  switch (status) {
-    case 'PENDING':
-      return 'Accepter la commande';
-    case 'ACCEPTED':
-      return 'Commencer la préparation';
-    case 'PREPARING':
-      return 'Marquer prête';
-    default:
-      return null;
-  }
-};
-
-const normalizeText = (value: string) => value.trim().toLowerCase();
-
-const getHandoffLabel = (status: RestaurantOrderDto['status']) => {
-  switch (status) {
-    case 'PENDING':
-      return 'En attente de validation par la cuisine.';
-    case 'ACCEPTED':
-      return 'Commande acceptée, la cuisine peut commencer la préparation.';
-    case 'PREPARING':
-      return 'La commande est en cours de préparation.';
-    case 'READY_FOR_PICKUP':
-      return 'Commande prête pour la remise au chauffeur.';
-    case 'PICKED_UP':
-      return 'La commande a quitté le restaurant avec le chauffeur.';
-    case 'DELIVERED':
-      return 'La commande a été livrée au client.';
-    default:
-      return 'La commande a été annulée.';
-  }
-};
-
-const getHistoryLabel = (status: RestaurantOrderDto['status']) => {
-  switch (status) {
-    case 'PENDING':
-      return 'Créée';
-    case 'ACCEPTED':
-      return 'Acceptée';
-    case 'PREPARING':
-      return 'Préparation';
-    case 'READY_FOR_PICKUP':
-      return 'Prête pour pickup';
-    case 'PICKED_UP':
-      return 'Récupérée par le chauffeur';
-    case 'DELIVERED':
-      return 'Livrée';
-    default:
-      return 'Annulée';
-  }
-};
+type Tab = 'active' | 'done';
 
 export const RestaurantDashboard = () => {
-  const { user } = useAuthStore();
   const toast = useToast();
-  const throwAsyncError = useAsyncError();
-  const [orders, setOrders] = useState<RestaurantOrderDto[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
+  const [restaurantError, setRestaurantError] = useState('');
+  const [tab, setTab] = useState<Tab>('active');
+  const [doneDate, setDoneDate] = useState(() => todayInBrussels());
+  const [activeDeliveries, setActiveDeliveries] = useState<Delivery[]>([]);
+  const [doneDeliveries, setDoneDeliveries] = useState<Delivery[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [loadMessage, setLoadMessage] = useState('');
   const [loadError, setLoadError] = useState('');
-  const [selectedOrder, setSelectedOrder] = useState<SelectedOrder>(null);
-  const [selectedHistory, setSelectedHistory] = useState<RestaurantOrderHistoryDto[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState('');
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<Delivery | null>(null);
+  const [cancelTargetId, setCancelTargetId] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [showForm, setShowForm] = useState(true);
 
-  const loadRestaurantOrders = async () => {
-    setIsLoading(true);
-    setLoadMessage('');
-    setLoadError('');
+  useEffect(() => {
+    let active = true;
+    fetchMyRestaurant()
+      .then((value) => {
+        if (active) setRestaurant(value);
+      })
+      .catch((error: unknown) => {
+        if (active) setRestaurantError(getApiErrorMessage(error, 'Restaurant introuvable.'));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
+  const loadDeliveries = useCallback(async () => {
     try {
-      const response = await fetchRestaurantOrders();
-      setOrders(response);
-
-      if (response.length === 0) {
-        setLoadMessage('Aucune commande n’est disponible pour le moment.');
-      }
+      const [active, done] = await Promise.all([
+        searchDeliveries({ status: ACTIVE_DELIVERY_STATUSES }),
+        tab === 'done'
+          ? searchDeliveries({ status: TERMINAL_DELIVERY_STATUSES, from: doneDate, to: doneDate })
+          : Promise.resolve(null),
+      ]);
+      setActiveDeliveries(active);
+      if (done) setDoneDeliveries(done);
+      setLoadError('');
+      setLastSyncAt(new Date().toISOString());
     } catch (error) {
-      if (!(error instanceof Error)) {
-        throwAsyncError(error);
-        return;
-      }
-
-      setOrders([]);
-      setLoadError('Impossible de charger les commandes du restaurant.');
-      toast.error('Chargement restaurant indisponible.');
+      setLoadError(getApiErrorMessage(error, 'Impossible de charger les livraisons.'));
     } finally {
       setIsLoading(false);
     }
+  }, [tab, doneDate]);
+
+  usePolling(loadDeliveries, RESTAURANT_POLL_MS, `${tab}:${doneDate}`);
+
+  /** Contract 9.1: after a command, replace the cached delivery with the returned object. */
+  const applyUpdate = (updated: Delivery) => {
+    const replace = (list: Delivery[]) => list.map((item) => (item.id === updated.id ? updated : item));
+    setActiveDeliveries((list) => (isActiveStatus(updated.status) ? replace(list) : list.filter((item) => item.id !== updated.id)));
+    setDoneDeliveries((list) => replace(list));
+    if (selectedId === updated.id) setSelectedSnapshot(updated);
   };
 
-  useEffect(() => {
-    void loadRestaurantOrders();
-  }, []);
+  const handleCreated = (created: Delivery) => {
+    setActiveDeliveries((list) => [created, ...list.filter((item) => item.id !== created.id)]);
+    setTab('active');
+  };
 
-  const summaries = useMemo<RestaurantOrderSummary[]>(() => {
-    return orders.map((order) => ({
-      id: order.id,
-      customerLabel: `Client #${order.customerId}`,
-      driverLabel: order.driverId ? `Chauffeur #${order.driverId}` : 'Non assigné',
-      statusCode: order.status,
-      statusLabel: mapStatus(order.status),
-      totalAmountLabel: formatMoney(order.totalAmount),
-      createdAtLabel: formatDateTime(order.createdAt),
-      restaurantId: order.restaurantId,
-    }));
-  }, [orders]);
+  const handleReady = async (delivery: Delivery) => {
+    setBusyId(delivery.id);
+    try {
+      applyUpdate(await markDeliveryReady(delivery.id));
+      toast.success(`Livraison #${delivery.id} marquée prête au retrait.`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Impossible de marquer la commande prête.'));
+      if (parseApiError(error).status === 409) void loadDeliveries();
+    } finally {
+      setBusyId(null);
+    }
+  };
 
-  const filteredOrders = summaries.filter((order) => {
-    const matchesSearch =
-      normalizeText(String(order.id)).includes(normalizeText(searchTerm)) ||
-      normalizeText(order.customerLabel).includes(normalizeText(searchTerm)) ||
-      normalizeText(order.driverLabel).includes(normalizeText(searchTerm));
-    const matchesStatus = statusFilter === 'all' || order.statusCode === statusFilter;
+  const handleCancel = async (deliveryId: number, reason: string) => {
+    setBusyId(deliveryId);
+    try {
+      applyUpdate(await cancelDelivery(deliveryId, reason));
+      setCancelTargetId(null);
+      toast.success(`Livraison #${deliveryId} annulée.`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Impossible d’annuler la livraison.'));
+      if (parseApiError(error).status === 409) void loadDeliveries();
+    } finally {
+      setBusyId(null);
+    }
+  };
 
-    return matchesSearch && matchesStatus;
-  });
+  const visibleDeliveries = useMemo(
+    () => (tab === 'active' ? activeDeliveries.filter((item) => isActiveStatus(item.status)) : doneDeliveries),
+    [tab, activeDeliveries, doneDeliveries]
+  );
+
+  const selectedDelivery = useMemo(() => {
+    if (selectedId === null) return null;
+    const fromLists = [...activeDeliveries, ...doneDeliveries].find((item) => item.id === selectedId);
+    if (fromLists && (!selectedSnapshot || fromLists.version >= selectedSnapshot.version)) return fromLists;
+    return selectedSnapshot?.id === selectedId ? selectedSnapshot : fromLists ?? null;
+  }, [selectedId, selectedSnapshot, activeDeliveries, doneDeliveries]);
+
+  const openDelivery = (delivery: Delivery) => {
+    setSelectedId(delivery.id);
+    setSelectedSnapshot(delivery);
+  };
+  const closeDelivery = () => {
+    setSelectedId(null);
+    setSelectedSnapshot(null);
+    setCancelTargetId(null);
+  };
 
   const summaryCards = [
-    { label: 'Commandes à traiter', value: String(summaries.filter((order) => order.statusCode === 'PENDING').length) },
-    { label: 'En préparation', value: String(summaries.filter((order) => order.statusCode === 'ACCEPTED' || order.statusCode === 'PREPARING').length) },
-    { label: 'Prêtes / en livraison', value: String(summaries.filter((order) => order.statusCode === 'READY_FOR_PICKUP' || order.statusCode === 'PICKED_UP').length) },
+    { label: 'En attente de chauffeur', value: activeDeliveries.filter((item) => item.status === 'CREATED').length },
+    { label: 'Chauffeur assigné', value: activeDeliveries.filter((item) => item.status === 'ASSIGNED').length },
+    { label: 'En route', value: activeDeliveries.filter((item) => item.status === 'PICKED_UP' || item.status === 'IN_TRANSIT').length },
   ];
 
-  const selectedSummary = selectedOrder ? summaries.find((order) => order.id === selectedOrder.id) ?? null : null;
-
-  useEffect(() => {
-    if (!selectedOrder) {
-      setSelectedHistory([]);
-      setHistoryLoading(false);
-      setHistoryError('');
-      return;
-    }
-
-    let isActive = true;
-
-    const loadHistory = async () => {
-      setHistoryLoading(true);
-      setHistoryError('');
-
-      try {
-        const response = await fetchRestaurantOrderHistory(selectedOrder.id);
-
-        if (!isActive) {
-          return;
-        }
-
-        if (response.length === 0) {
-          setSelectedHistory([]);
-          setHistoryError('Aucun historique de statut n’est renvoyé par le backend.');
-          return;
-        }
-
-        setSelectedHistory(response);
-      } catch (error) {
-        if (!(error instanceof Error)) {
-          throwAsyncError(error);
-          return;
-        }
-
-        if (!isActive) {
-          return;
-        }
-
-        setSelectedHistory([]);
-        setHistoryError('Impossible de charger l’historique du statut.');
-      } finally {
-        if (isActive) {
-          setHistoryLoading(false);
-        }
-      }
-    };
-
-    void loadHistory();
-
-    return () => {
-      isActive = false;
-    };
-  }, [selectedOrder?.id, selectedSummary?.statusCode]);
-
-  const selectedWorkflowIndex = selectedSummary
-    ? workflowSteps.findIndex((step) => step.status === selectedSummary.statusCode)
-    : -1;
-
-  const workflowStatus = workflowSteps.map((step, index) => {
-    if (selectedWorkflowIndex < 0) {
-      return { ...step, state: 'upcoming' as const };
-    }
-
-    if (index < selectedWorkflowIndex) {
-      return { ...step, state: 'done' as const };
-    }
-
-    if (index === selectedWorkflowIndex) {
-      return { ...step, state: 'current' as const };
-    }
-
-    return { ...step, state: 'upcoming' as const };
-  });
-
-  const selectedHistoryItems = selectedHistory.map((historyEvent) => ({
-    id: historyEvent.id,
-    title: getHistoryLabel(historyEvent.newStatus),
-    value: (
-      <div className="space-y-1">
-        <p className="font-medium text-slate-900">
-          {historyEvent.oldStatus ? `${getHistoryLabel(historyEvent.oldStatus)} → ${getHistoryLabel(historyEvent.newStatus)}` : getHistoryLabel(historyEvent.newStatus)}
-        </p>
-        <p className="text-xs text-slate-500">Par {historyEvent.changedBy}</p>
-        <p className="text-xs text-slate-400">{formatDateTime(historyEvent.createdAt)}</p>
+  const renderActions = (delivery: Delivery, inDrawer = false) => {
+    const isBusy = busyId === delivery.id;
+    return (
+      <div className="flex flex-wrap gap-2">
+        {canMarkReady(delivery.status) && !delivery.readyAt ? (
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={() => void handleReady(delivery)}
+            className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-50"
+          >
+            Commande prête
+          </button>
+        ) : null}
+        {canCancel(delivery.status) ? (
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={() => setCancelTargetId(delivery.id)}
+            className="rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition hover:border-rose-500 disabled:opacity-50"
+          >
+            Annuler
+          </button>
+        ) : null}
+        {!inDrawer ? (
+          <button
+            type="button"
+            onClick={() => openDelivery(delivery)}
+            className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-black hover:text-black"
+          >
+            Détails
+          </button>
+        ) : null}
       </div>
-    ),
-  }));
-
-  const handleAction = async () => {
-    if (!selectedOrder || !selectedSummary) {
-      return;
-    }
-
-    const activeStatus = selectedSummary.statusCode;
-    setIsSaving(true);
-    setLoadMessage('');
-    setLoadError('');
-
-    try {
-      if (activeStatus === 'PENDING') {
-        await acceptRestaurantOrder(selectedOrder.id);
-      } else if (activeStatus === 'ACCEPTED') {
-        await startPreparingRestaurantOrder(selectedOrder.id);
-      } else if (activeStatus === 'PREPARING') {
-        await readyRestaurantOrder(selectedOrder.id);
-      }
-
-      await loadRestaurantOrders();
-      setLoadMessage('La commande a été mise à jour avec succès.');
-    } catch (error) {
-      if (!(error instanceof Error)) {
-        throwAsyncError(error);
-        return;
-      }
-
-      setLoadError('Impossible de mettre à jour la commande pour le moment.');
-      toast.error('Échec de mise à jour de la commande.');
-    } finally {
-      setIsSaving(false);
-    }
+    );
   };
 
-  useEffect(() => {
-    if (loadMessage) {
-      toast.success(loadMessage);
-    }
-  }, [loadMessage, toast]);
-
-  const openOrder = (orderId: number) => setSelectedOrder({ id: orderId });
-  const closeOrder = () => setSelectedOrder(null);
-
   return (
-    <AppShell title="Restaurant Dashboard" subtitle={`Bienvenue, restaurant #${user?.id ?? '...'}`}>
+    <AppShell
+      title={restaurant?.name ?? 'Espace restaurant'}
+      subtitle="Créez vos livraisons et suivez-les en direct"
+    >
       <div className="space-y-6">
-        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-slate-400">Vue restaurant</p>
-            <h2 className="text-2xl font-semibold text-slate-900">Commandes et workflow opérationnel</h2>
-          </div>
-          <p className="text-sm text-slate-500">
-            {isLoading ? 'Chargement des commandes restaurant...' : 'Données synchronisées depuis les endpoints backend.'}
-          </p>
-        </div>
-
-        {loadMessage ? (
-          <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-800">
-            {loadMessage}
+        {restaurantError ? (
+          <div className="rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+            {restaurantError} Contactez l’administrateur de la plateforme.
           </div>
         ) : null}
 
@@ -367,7 +199,7 @@ export const RestaurantDashboard = () => {
               <p>{loadError}</p>
               <button
                 type="button"
-                onClick={loadRestaurantOrders}
+                onClick={() => void loadDeliveries()}
                 className="rounded-full bg-rose-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-700"
               >
                 Réessayer
@@ -385,209 +217,146 @@ export const RestaurantDashboard = () => {
           ))}
         </div>
 
-        <section className="rounded-3xl border border-black/5 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto] md:items-center">
-            <label className="flex flex-col gap-2 text-sm font-medium text-slate-600">
-              Rechercher
-              <input
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Commande, client, chauffeur..."
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-black"
-              />
-            </label>
-
-            <label className="flex flex-col gap-2 text-sm font-medium text-slate-600 md:min-w-[220px]">
-              Statut
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-black"
-              >
-                <option value="all">Tous</option>
-                <option value="PENDING">En attente</option>
-                <option value="ACCEPTED">Acceptée</option>
-                <option value="PREPARING">Préparation</option>
-                <option value="READY_FOR_PICKUP">Prête pour pickup</option>
-                <option value="PICKED_UP">En livraison</option>
-                <option value="DELIVERED">Livrée</option>
-                <option value="CANCELLED">Annulée</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
         <section className="rounded-3xl border border-black/5 bg-white p-6 shadow-sm">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold">Commandes à traiter</h3>
-              <p className="text-sm text-slate-500">Flux des commandes et progression du workflow.</p>
+              <h3 className="text-lg font-semibold">Nouvelle livraison</h3>
+              <p className="text-sm text-slate-500">Commande reçue par téléphone ou WhatsApp ? Saisissez-la ici.</p>
             </div>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              {filteredOrders.length} commandes
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowForm((value) => !value)}
+              aria-expanded={showForm}
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-black hover:text-black"
+            >
+              {showForm ? 'Masquer' : 'Afficher'}
+            </button>
+          </div>
+          {showForm ? <CreateDeliveryForm onCreated={handleCreated} /> : null}
+        </section>
+
+        <section className="rounded-3xl border border-black/5 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div role="tablist" aria-label="Livraisons" className="flex gap-2">
+              {([
+                ['active', 'En cours'],
+                ['done', 'Terminées'],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  onClick={() => setTab(id)}
+                  className={`rounded-full px-4 py-2 text-sm transition ${tab === id ? 'bg-black text-white' : 'border border-slate-200 text-slate-600 hover:border-black'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+              {tab === 'done' ? (
+                <label className="flex items-center gap-2">
+                  Date
+                  <input
+                    type="date"
+                    value={doneDate}
+                    max={todayInBrussels()}
+                    onChange={(event) => setDoneDate(event.target.value || todayInBrussels())}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-900"
+                  />
+                </label>
+              ) : null}
+              <span>
+                {isLoading ? 'Chargement…' : lastSyncAt ? `Actualisé à ${formatTime(lastSyncAt)}` : ''}
+              </span>
+            </div>
           </div>
 
-          {isLoading ? (
+          {!isLoading && visibleDeliveries.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-              Chargement des commandes...
+              {tab === 'active' ? 'Aucune livraison en cours.' : 'Aucune livraison terminée ce jour-là.'}
             </div>
           ) : null}
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {filteredOrders.map((order) => (
-              <button
-                key={order.id}
-                type="button"
-                onClick={() => openOrder(order.id)}
-                className="rounded-2xl border border-slate-100 bg-slate-50 p-5 text-left transition hover:-translate-y-0.5 hover:border-black/10 hover:shadow-md"
-              >
+          <ul className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {visibleDeliveries.map((delivery) => (
+              <li key={delivery.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-5" aria-label={`Livraison #${delivery.id}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="font-semibold text-slate-900">Commande #{order.id}</h4>
-                    <p className="mt-1 text-sm text-slate-500">{order.customerLabel}</p>
+                  <div className="min-w-0">
+                    <h4 className="font-semibold text-slate-900">
+                      Livraison #{delivery.id}
+                      {delivery.orderReference ? <span className="ml-2 text-sm font-normal text-slate-500">{delivery.orderReference}</span> : null}
+                    </h4>
+                    <p className="mt-1 truncate text-sm text-slate-600">{delivery.customerName ?? 'Client'} · {delivery.deliveryAddress}</p>
                   </div>
-                  <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadgeClasses[order.statusCode] ?? 'bg-slate-100 text-slate-600'}`}>
-                    {order.statusLabel}
-                  </span>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <StatusBadge status={delivery.status} />
+                    {delivery.readyAt && canMarkReady(delivery.status) ? <ReadyBadge /> : null}
+                  </div>
                 </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-slate-400">Montant</p>
-                    <p className="mt-1 font-semibold text-slate-900">{order.totalAmountLabel}</p>
-                  </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div className="rounded-2xl bg-white p-3">
                     <p className="text-slate-400">Chauffeur</p>
-                    <p className="mt-1 font-semibold text-slate-900">{order.driverLabel}</p>
+                    <p className="mt-1 font-semibold text-slate-900">
+                      {delivery.driver ? personName(delivery.driver.firstName, delivery.driver.lastName, `#${delivery.driver.id}`) : 'En attente'}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-slate-400">{getPaymentModeLabel(delivery.paymentMode)}</p>
+                    <p className="mt-1 font-semibold text-slate-900">
+                      {delivery.paymentMode === 'CASH_ON_DELIVERY' ? formatMoney(delivery.cashToCollect) : formatMoney(delivery.orderAmount)}
+                    </p>
                   </div>
                 </div>
 
-                <p className="mt-4 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
-                  Cliquer pour voir le workflow
+                <p className="mt-3 text-xs text-slate-400">
+                  Créée {formatElapsed(delivery.createdAt)}
+                  {delivery.failureReason ? ` · Motif : ${delivery.failureReason}` : ''}
+                  {delivery.cancellationReason ? ` · Motif : ${delivery.cancellationReason}` : ''}
                 </p>
-              </button>
-            ))}
-          </div>
 
-          {!isLoading && filteredOrders.length === 0 ? (
-            <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-              Aucune commande ne correspond aux critères sélectionnés.
-            </div>
-          ) : null}
+                <div className="mt-4 space-y-3">
+                  {cancelTargetId === delivery.id && selectedId === null ? (
+                    <CancelDeliveryDialog
+                      deliveryId={delivery.id}
+                      isSubmitting={busyId === delivery.id}
+                      onConfirm={(reason) => void handleCancel(delivery.id, reason)}
+                      onDismiss={() => setCancelTargetId(null)}
+                    />
+                  ) : (
+                    renderActions(delivery)
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
 
-      <DetailDrawer
-        isOpen={selectedOrder !== null}
-        title={selectedSummary ? `Commande #${selectedSummary.id}` : ''}
-        subtitle={selectedSummary ? 'Workflow restaurant et progression opérationnelle' : ''}
-        badge={selectedSummary ? <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusBadgeClasses[selectedSummary.statusCode] ?? 'bg-slate-100 text-slate-600'}`}>{selectedSummary.statusLabel}</span> : undefined}
-        sections={selectedSummary ? [
-          {
-            title: 'Résumé',
-            items: [
-              { label: 'Statut', value: selectedSummary.statusLabel },
-              { label: 'Client', value: selectedSummary.customerLabel },
-              { label: 'Chauffeur', value: selectedSummary.driverLabel },
-              { label: 'Montant', value: selectedSummary.totalAmountLabel },
-              { label: 'Créée le', value: selectedSummary.createdAtLabel },
-            ],
-          },
-          {
-            title: 'Remise et livraison',
-            items: [
-              {
-                label: 'Handoff',
-                value: (
-                  <div className="space-y-1">
-                    <p className="font-medium text-slate-900">{getHandoffLabel(selectedSummary.statusCode)}</p>
-                    <p className="text-xs text-slate-500">{selectedSummary.driverLabel}</p>
-                  </div>
-                ),
-              },
-              {
-                label: 'Progression',
-                value: (
-                  <div className="space-y-2">
-                    {workflowStatus.map((step) => (
-                      <div key={step.status} className="flex items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 shadow-sm">
-                        <span className="text-sm text-slate-700">{step.label}</span>
-                        <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-                          {step.state === 'done' ? 'Terminée' : step.state === 'current' ? 'En cours' : 'À venir'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ),
-              },
-            ],
-          },
-          {
-            title: 'Historique de statut',
-            items: [
-              {
-                label: historyError ? 'Historique dégradé' : historyLoading ? 'Chargement' : 'Derniers changements',
-                value: historyLoading ? (
-                  <p className="text-sm text-slate-500">Chargement de l’historique de statut...</p>
-                ) : (
-                  <div className="space-y-3">
-                    {historyError ? <p className="text-sm text-amber-700">{historyError}</p> : null}
-                    {selectedHistoryItems.length > 0 ? (
-                      selectedHistoryItems.map((item) => (
-                        <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{item.title}</p>
-                          <div className="mt-2">{item.value}</div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-slate-500">Aucun événement disponible pour cette commande.</p>
-                    )}
-                  </div>
-                ),
-              },
-            ],
-          },
-        ] : []}
-        footer={selectedSummary ? (
-          <div className="space-y-4">
-            {getAvailableActionLabel(selectedSummary.statusCode) ? (
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={handleAction}
-                className="rounded-full bg-black px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSaving ? 'Mise à jour...' : getAvailableActionLabel(selectedSummary.statusCode)}
-              </button>
-            ) : (
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                <p>Aucune action restaurant disponible pour ce statut.</p>
-                <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">
-                  {selectedSummary.statusCode === 'READY_FOR_PICKUP'
-                    ? 'La commande attend la prise en charge du chauffeur.'
-                    : selectedSummary.statusCode === 'PICKED_UP'
-                      ? 'La commande est désormais en livraison.'
-                      : selectedSummary.statusCode === 'DELIVERED'
-                        ? 'La livraison est terminée.'
-                        : 'Le workflow ne propose plus d’action côté restaurant.'}
-                </p>
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-slate-500">Les changements sont envoyés vers les endpoints restaurant.</p>
-              <button
-                type="button"
-                onClick={closeOrder}
-                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-black hover:text-black"
-              >
-                Fermer le détail
-              </button>
+      <DeliveryDetailDrawer
+        delivery={selectedDelivery}
+        onClose={closeDelivery}
+        footer={
+          selectedDelivery ? (
+            <div className="space-y-3">
+              {cancelTargetId === selectedDelivery.id ? (
+                <CancelDeliveryDialog
+                  deliveryId={selectedDelivery.id}
+                  isSubmitting={busyId === selectedDelivery.id}
+                  onConfirm={(reason) => void handleCancel(selectedDelivery.id, reason)}
+                  onDismiss={() => setCancelTargetId(null)}
+                />
+              ) : (
+                renderActions(selectedDelivery, true)
+              )}
+              {!canCancel(selectedDelivery.status) && isActiveStatus(selectedDelivery.status) ? (
+                <p className="text-xs text-slate-500">La commande a quitté le restaurant : seul le chauffeur peut la clôturer.</p>
+              ) : null}
             </div>
-          </div>
-        ) : null}
-        onClose={closeOrder}
+          ) : null
+        }
       />
     </AppShell>
   );

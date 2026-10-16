@@ -57,8 +57,9 @@ const FIELD_MESSAGES: Array<[RegExp, string]> = [
 
 export function translateApiMessage(message: string, table: Array<[RegExp, string]> = KNOWN_MESSAGES): string {
   for (const [pattern, replacement] of table) {
-    if (pattern.test(message)) {
-      return message.replace(pattern, replacement);
+    const match = message.match(pattern);
+    if (match) {
+      return replacement.replace(/\$(\d)/g, (_, index: string) => match[Number(index)] ?? '');
     }
   }
   return message;

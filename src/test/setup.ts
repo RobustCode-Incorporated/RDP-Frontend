@@ -21,3 +21,28 @@ if (typeof window !== 'undefined' && !window.localStorage) {
   };
   Object.defineProperty(window, 'localStorage', { configurable: true, value: memoryStorage });
 }
+
+import { createElement } from 'react';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { __resetNominatimForTests } from '../lib/nominatim';
+
+// Leaflet does not render in jsdom: replace the lazy map with a lightweight stub.
+vi.mock('../components/shared/LiveMap', () => ({
+  LiveMap: ({ points }: { points: Array<{ kind: string; label: string }> }) =>
+    createElement(
+      'div',
+      { 'data-testid': 'live-map' },
+      points.map((point) => `${point.kind}:${point.label}`).join(' | ')
+    ),
+}));
+
+beforeEach(() => {
+  // No real network in tests: Nominatim calls must be mocked explicitly per test.
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('fetch is not mocked in this test'))));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  __resetNominatimForTests();
+});
