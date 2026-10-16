@@ -13,7 +13,8 @@ interface Route {
 }
 
 export interface MockApi {
-  on: (method: Method, matcher: string | RegExp, reply: unknown | Handler) => MockApi;
+  on(method: Method, matcher: string | RegExp, handler: Handler): MockApi;
+  on(method: Method, matcher: string | RegExp, data: object | string | number | boolean | null): MockApi;
   /** Calls `method url` recorded so far, in order. */
   calls: Array<{ method: Method; url: string; body: unknown }>;
   callsTo: (method: Method, matcher: string | RegExp) => Array<{ url: string; body: unknown }>;
@@ -69,7 +70,7 @@ export function mockApi(): MockApi {
 
   const mock: MockApi = {
     calls,
-    on(method, matcher, reply) {
+    on(method: Method, matcher: string | RegExp, reply: unknown) {
       const handler: Handler = typeof reply === 'function' ? (reply as Handler) : () => reply;
       routes.push({ method, matcher, handler });
       return mock;

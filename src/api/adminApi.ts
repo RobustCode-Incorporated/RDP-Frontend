@@ -1,59 +1,74 @@
 import { api } from './axios';
+import type {
+  Delivery,
+  Driver,
+  RegisterRestaurantRequest,
+  Restaurant,
+  Role,
+  UpdateRestaurantRequest,
+  User,
+} from './types';
 
-export interface AdminRestaurantDto {
-  id: number;
-  name: string;
-  description: string | null;
-  phoneNumber: string | null;
-  email: string | null;
-  address: string;
-  city: string | null;
-  country: string | null;
-  status: 'ACTIVE' | 'INACTIVE';
-  latitude?: number | null;
-  longitude?: number | null;
-}
+// ADMIN / DISPATCHER endpoints (contract sections 2.3, 4.6, 5, 6, 7).
+export {
+  cancelDelivery,
+  fetchDeliveryHistory,
+  markDeliveryReady,
+  searchDeliveries,
+} from './deliveryApi';
 
-export interface AdminDriverDto {
-  id: number;
-  userId: number;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phoneNumber: string;
-  vehicleType: string;
-  vehiclePlate: string;
-  availabilityStatus: 'AVAILABLE' | 'BUSY' | 'OFFLINE';
-  currentLatitude?: number | null;
-  currentLongitude?: number | null;
-}
-
-export interface AdminOrderDto {
-  id: number;
-  restaurantId: number;
-  customerId: number;
-  driverId: number | null;
-  status: 'PENDING' | 'ACCEPTED' | 'PREPARING' | 'READY_FOR_PICKUP' | 'PICKED_UP' | 'DELIVERED' | 'CANCELLED';
-  totalAmount: string;
-  createdAt: string;
-}
-
-export async function fetchAdminRestaurants() {
-  const { data } = await api.get<AdminRestaurantDto[]>('/api/restaurants');
+/** `GET /api/restaurants` (ADMIN). */
+export async function fetchRestaurants() {
+  const { data } = await api.get<Restaurant[]>('/api/restaurants');
   return data;
 }
 
-export async function fetchAdminDrivers() {
-  const { data } = await api.get<AdminDriverDto[]>('/api/drivers');
+/** `PATCH /api/restaurants/{id}` (ADMIN) - partial update (e.g. coordinates). */
+export async function updateRestaurant(restaurantId: number, patch: UpdateRestaurantRequest) {
+  const { data } = await api.patch<Restaurant>(`/api/restaurants/${restaurantId}`, patch);
   return data;
 }
 
-export async function fetchAdminOrders() {
-  const { data } = await api.get<AdminOrderDto[]>('/api/orders');
+/** `POST /api/auth/register-restaurant` (ADMIN) - restaurant + its RESTAURANT login. Returns the new User. */
+export async function registerRestaurant(request: RegisterRestaurantRequest) {
+  const { data } = await api.post<User>('/api/auth/register-restaurant', request);
   return data;
 }
 
-export async function assignDriverToOrder(orderId: number, driverId: number) {
-  const { data } = await api.patch<AdminOrderDto>(`/api/orders/${orderId}/assign-driver/${driverId}`);
+/** `GET /api/drivers` (ADMIN, DISPATCHER). */
+export async function fetchDrivers() {
+  const { data } = await api.get<Driver[]>('/api/drivers');
+  return data;
+}
+
+/** `GET /api/drivers/available` (ADMIN, DISPATCHER) - enabled + AVAILABLE. */
+export async function fetchAvailableDrivers() {
+  const { data } = await api.get<Driver[]>('/api/drivers/available');
+  return data;
+}
+
+/** `PUT /api/deliveries/{id}/assign` (ADMIN, DISPATCHER) - assign or reassign before pickup. */
+export async function assignDriver(deliveryId: number, driverId: number) {
+  const { data } = await api.put<Delivery>(`/api/deliveries/${deliveryId}/assign`, { driverId });
+  return data;
+}
+
+/** `GET /api/admin/users?role=&enabled=` (ADMIN). */
+export async function fetchUsers(filters: { role?: Role; enabled?: boolean } = {}) {
+  const query = new URLSearchParams();
+  if (filters.role) query.set('role', filters.role);
+  if (filters.enabled !== undefined) query.set('enabled', String(filters.enabled));
+  const suffix = query.toString();
+  const { data } = await api.get<User[]>(`/api/admin/users${suffix ? `?${suffix}` : ''}`);
+  return data;
+}
+
+export async function enableUser(userId: number) {
+  const { data } = await api.patch<User>(`/api/admin/users/${userId}/enable`);
+  return data;
+}
+
+export async function disableUser(userId: number) {
+  const { data } = await api.patch<User>(`/api/admin/users/${userId}/disable`);
   return data;
 }
