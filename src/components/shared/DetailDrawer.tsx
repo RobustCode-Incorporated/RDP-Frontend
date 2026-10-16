@@ -17,6 +17,8 @@ interface DetailDrawerProps {
   badge?: ReactNode;
   sections: DetailSection[];
   footer?: ReactNode;
+  /** Extra content rendered after the sections (timeline, map...). */
+  children?: ReactNode;
   onClose: () => void;
 }
 
@@ -27,6 +29,7 @@ export function DetailDrawer({
   badge,
   sections,
   footer,
+  children,
   onClose,
 }: DetailDrawerProps) {
   const drawerId = useId();
@@ -151,6 +154,7 @@ export function DetailDrawer({
                 </dl>
               </section>
             ))}
+            {children}
           </div>
         </div>
 

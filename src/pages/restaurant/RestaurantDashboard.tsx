@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/layout/AppShell';
 import { DetailDrawer } from '../../components/shared/DetailDrawer';
-import { useToast } from '../../components/feedback/ToastProvider';
+import { useToast } from '../../components/feedback/toastContext';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAsyncError } from '../../hooks/useAsyncError';
 import {
