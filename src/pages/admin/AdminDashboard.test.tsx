@@ -61,6 +61,28 @@ describe('AdminDashboard', () => {
     expect(screen.getByText('1 en livraison · 2 au total')).toBeInTheDocument();
   });
 
+  it('re-reads an open delivery once it leaves the active set so the drawer is not stale', async () => {
+    const user = userEvent.setup();
+    apiMock.on('GET', /^\/api\/deliveries\?status=CREATED/, [
+      makeDelivery({ id: 7, status: 'IN_TRANSIT', version: 3, driver: ASSIGNED_DRIVER }),
+    ]);
+
+    renderAdminDashboard();
+    const item = await screen.findByRole('listitem', { name: 'Livraison en cours #7' });
+    await user.click(within(item).getByRole('button', { name: 'Voir' }));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getAllByText('En route').length).toBeGreaterThan(0);
+
+    // The driver completes it: it disappears from the active list returned by polling.
+    apiMock
+      .on('GET', /^\/api\/deliveries\?status=CREATED/, [])
+      .on('GET', '/api/deliveries/7', makeDelivery({ id: 7, status: 'DELIVERED', version: 4, driver: ASSIGNED_DRIVER }));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getAllByText('Livrée').length).toBeGreaterThan(0));
+    expect(apiMock.calls.some((call) => call.method === 'GET' && call.url === '/api/deliveries/7')).toBe(true);
+  });
+
   it('assigns an available driver (with distance) and refreshes the list after a 409', async () => {
     const user = userEvent.setup();
     apiMock

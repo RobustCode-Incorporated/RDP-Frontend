@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/layout/AppShell';
 import { DeliveryDetailDrawer } from '../../components/shared/DeliveryDetailDrawer';
 import { CancelDeliveryDialog } from '../../components/shared/CancelDeliveryDialog';
 import { useToast } from '../../components/feedback/toastContext';
 import { usePolling } from '../../hooks/usePolling';
 import { useAuthStore } from '../../store/useAuthStore';
+import { fetchDelivery } from '../../api/deliveryApi';
 import { cancelDelivery, fetchDrivers, fetchRestaurants, markDeliveryReady, searchDeliveries } from '../../api/adminApi';
 import { getApiErrorMessage, parseApiError } from '../../api/errors';
 import type { Delivery, Driver, Restaurant } from '../../api/types';
@@ -96,6 +97,25 @@ export const AdminDashboard = () => {
     const fresh = activeDeliveries.find((item) => item.id === selected.id);
     return fresh && fresh.version >= selected.version ? fresh : selected;
   }, [selected, activeDeliveries]);
+
+  // A delivery that leaves the active set (delivered, failed, cancelled by someone
+  // else) is no longer in the polling results: re-read it so the drawer isn't stale.
+  const selectedLeftActiveSet = Boolean(
+    selected && isActiveStatus(selected.status) && !activeDeliveries.some((item) => item.id === selected.id),
+  );
+  const selectedId = selected?.id;
+  useEffect(() => {
+    if (!selectedLeftActiveSet || selectedId === undefined) return;
+    let cancelled = false;
+    fetchDelivery(selectedId)
+      .then((fresh) => {
+        if (!cancelled) setSelected((current) => (current?.id === fresh.id ? fresh : current));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLeftActiveSet, selectedId, lastSyncAt]);
 
   const openDelivery = (delivery: Delivery) => {
     setSelected(delivery);

@@ -63,6 +63,8 @@ export function AdminLiveMap({
     hasFittedRef.current = false;
 
     return () => {
+      // Stop pending pan/zoom animations: removing a map mid-animation throws (_leaflet_pos).
+      map.stop();
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
@@ -98,9 +100,9 @@ export function AdminLiveMap({
     if (!hasFittedRef.current && points.length > 0) {
       const bounds = L.latLngBounds(points.map((point) => [point.latitude, point.longitude] as [number, number]));
       if (points.length === 1) {
-        map.setView(bounds.getCenter(), 14);
+        map.setView(bounds.getCenter(), 14, { animate: false });
       } else {
-        map.fitBounds(bounds.pad(0.2));
+        map.fitBounds(bounds.pad(0.2), { animate: false });
       }
       hasFittedRef.current = true;
     }
@@ -118,7 +120,7 @@ export function AdminLiveMap({
 
   return (
     <div className="space-y-3">
-      <div className="overflow-hidden rounded-2xl border border-slate-100">
+      <div className="relative isolate overflow-hidden rounded-2xl border border-slate-100">
         <div ref={containerRef} className={`${heightClassName} w-full`} data-testid="leaflet-map" />
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-slate-500">
