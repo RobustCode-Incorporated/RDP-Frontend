@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { api } from '../../api/axios';
-import { useAuthStore } from '../../store/useAuthStore';
 import { jwtDecode } from 'jwt-decode';
+import { api } from '../../api/axios';
+import { parseApiError } from '../../api/errors';
+import type { LoginResponse } from '../../api/types';
+import { useAuthStore } from '../../store/useAuthStore';
+import { homePathForRole } from '../../routes/homePath';
 import logoImage from '../../assets/RobustCodelogowhite.png';
 
 export const Login = () => {
@@ -24,17 +27,7 @@ export const Login = () => {
       return;
     }
 
-    if (user.role === 'ADMIN') {
-      navigate('/admin', { replace: true });
-      return;
-    }
-
-    if (user.role === 'DRIVER') {
-      navigate('/driver', { replace: true });
-      return;
-    }
-
-    navigate('/restaurant', { replace: true });
+    navigate(homePathForRole(user.role), { replace: true });
   }, [navigate, token, user]);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -43,20 +36,25 @@ export const Login = () => {
     setError('');
 
     try {
-      const response = await api.post('/api/auth/login', { email, password });
-      const { token } = response.data;
-      const decoded: any = jwtDecode(token);
-      
-      const role = decoded.role || decoded.authorities || 'RESTAURANT';
-      setAuth({ id: decoded.id || 0, email, role }, token);
-
-      if (role === 'ADMIN') navigate('/admin');
-      else if (role === 'DRIVER') navigate('/driver');
-      else navigate('/restaurant');
-      
+      const { data } = await api.post<LoginResponse>('/api/auth/login', { email, password });
+      let decoded: { role?: string; id?: number } = {};
+      try {
+        decoded = jwtDecode<{ role?: string; id?: number }>(data.token);
+      } catch {
+        // The role is also returned in the body (contract 2.1).
+      }
+      const role = data.role ?? decoded.role ?? 'RESTAURANT';
+      setAuth({ id: decoded.id ?? 0, email: data.email ?? email, role }, data.token);
+      navigate(homePathForRole(role));
     } catch (err) {
-      console.error(err);
-      setError('Identifiants incorrects.');
+      const parsed = parseApiError(err, 'Connexion impossible pour le moment.');
+      if (parsed.status === 401) {
+        setError('Identifiants incorrects.');
+      } else if (parsed.status === 403) {
+        setError('Votre compte est en attente de validation par l’administrateur (ou a été désactivé). Vous pourrez vous connecter dès sa validation.');
+      } else {
+        setError(parsed.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -84,15 +82,16 @@ export const Login = () => {
 
           {registrationSuccess ? (
             <div className="mb-4 p-3 bg-emerald-100 text-emerald-700 rounded-lg text-sm">
-              Compte créé avec succès. Connectez-vous avec vos nouveaux identifiants.
+              Compte créé. Vous pourrez vous connecter dès sa validation par l’administrateur.
             </div>
           ) : null}
 
-          {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>}
+          {error && <div role="alert" className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>}
 
           <form onSubmit={handleLogin} className="flex flex-col">
-            <label className="font-semibold mb-1 text-[#333]">Identifiant</label>
+            <label htmlFor="login-email" className="font-semibold mb-1 text-[#333]">Identifiant</label>
             <input
+              id="login-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -101,9 +100,10 @@ export const Login = () => {
               required
             />
 
-            <label className="font-semibold mb-1 text-[#333]">Mot de passe</label>
+            <label htmlFor="login-password" className="font-semibold mb-1 text-[#333]">Mot de passe</label>
             <div className="relative w-full mb-6">
               <input
+                id="login-password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -113,6 +113,7 @@ export const Login = () => {
               />
               <button
                 type="button"
+                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black transition-colors"
               >
@@ -141,9 +142,9 @@ export const Login = () => {
           </form>
 
           <p className="mt-5 text-center text-gray-500">
-            Pas encore de compte ?{' '}
+            Chauffeur sans compte ?{' '}
             <Link to="/register" className="text-black font-bold underline">
-              S’enregistrer
+              S’inscrire comme chauffeur
             </Link>
           </p>
         </div>

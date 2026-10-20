@@ -1,322 +1,169 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../../api/axios';
+import { parseApiError } from '../../api/errors';
+import type { RegisterDriverRequest, User } from '../../api/types';
+import { PHONE_REGEX } from '../../lib/format';
 
-type RegistrationRole = 'DRIVER' | 'RESTAURANT';
+type Values = Omit<RegisterDriverRequest, 'role'>;
+type Errors = Partial<Record<keyof Values, string>>;
 
+const EMPTY: Values = {
+  firstName: '',
+  lastName: '',
+  email: '',
+  password: '',
+  phoneNumber: '',
+  vehicleType: '',
+  vehiclePlate: '',
+};
+
+const VEHICLE_TYPES = [
+  { value: 'BIKE', label: 'Vélo' },
+  { value: 'SCOOTER', label: 'Scooter' },
+  { value: 'MOTORBIKE', label: 'Moto' },
+  { value: 'CAR', label: 'Voiture' },
+];
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const validate = (values: Values): Errors => {
+  const errors: Errors = {};
+  (Object.keys(EMPTY) as Array<keyof Values>).forEach((key) => {
+    if (!values[key].trim()) errors[key] = 'Champ obligatoire.';
+  });
+  if (values.email && !EMAIL_REGEX.test(values.email.trim())) errors.email = 'Email invalide.';
+  if (values.password && values.password.length < 8) errors.password = '8 caractères minimum.';
+  if (values.phoneNumber && !PHONE_REGEX.test(values.phoneNumber.trim())) {
+    errors.phoneNumber = 'Numéro invalide (ex. +32 470 12 34 56).';
+  }
+  return errors;
+};
+
+const inputClass = (hasError: boolean) =>
+  `w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-black ${hasError ? 'border-red-400' : 'border-gray-300'}`;
+
+/**
+ * Public signup is for DRIVERS only (contract 2.2). Restaurants are onboarded by the
+ * platform admin. New driver accounts are disabled until an admin validates them.
+ */
 export const Register = () => {
-  const navigate = useNavigate();
-  const [role, setRole] = useState<RegistrationRole>('DRIVER');
+  const [values, setValues] = useState<Values>(EMPTY);
+  const [errors, setErrors] = useState<Errors>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [createdEmail, setCreatedEmail] = useState('');
 
-  const [driverEmail, setDriverEmail] = useState('');
-  const [driverPassword, setDriverPassword] = useState('');
-  const [driverFirstName, setDriverFirstName] = useState('');
-  const [driverLastName, setDriverLastName] = useState('');
-  const [driverPhoneNumber, setDriverPhoneNumber] = useState('');
-  const [driverVehicleType, setDriverVehicleType] = useState('');
-  const [driverVehiclePlate, setDriverVehiclePlate] = useState('');
-
-  const [restaurantName, setRestaurantName] = useState('');
-  const [restaurantDescription, setRestaurantDescription] = useState('');
-  const [restaurantPhone, setRestaurantPhone] = useState('');
-  const [restaurantEmail, setRestaurantEmail] = useState('');
-  const [restaurantAddress, setRestaurantAddress] = useState('');
-  const [restaurantCity, setRestaurantCity] = useState('');
-  const [restaurantCountry, setRestaurantCountry] = useState('');
-  const [adminEmail, setAdminEmail] = useState('');
-  const [adminPassword, setAdminPassword] = useState('');
-  const [adminFirstName, setAdminFirstName] = useState('');
-  const [adminLastName, setAdminLastName] = useState('');
-
-  const extractErrorMessage = (err: unknown): string => {
-    if (typeof err === 'object' && err !== null && 'response' in err) {
-      const response = (err as { response?: { data?: unknown } }).response;
-      const data = response?.data;
-      if (typeof data === 'string' && data.trim()) {
-        return data;
-      }
-      if (typeof data === 'object' && data !== null && 'message' in data) {
-        const message = (data as { message?: unknown }).message;
-        if (typeof message === 'string' && message.trim()) {
-          return message;
-        }
-      }
-    }
-    return 'Inscription impossible pour le moment.';
+  const update = (key: keyof Values, value: string) => {
+    setValues((current) => ({ ...current, [key]: value }));
+    setErrors((current) => ({ ...current, [key]: undefined }));
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setLoading(true);
     setError('');
-    setSuccess('');
+    const clientErrors = validate(values);
+    setErrors(clientErrors);
+    if (Object.keys(clientErrors).length > 0) return;
 
+    setLoading(true);
     try {
-      if (role === 'DRIVER') {
-        await api.post('/api/auth/register', {
-          email: driverEmail,
-          password: driverPassword,
-          firstName: driverFirstName,
-          lastName: driverLastName,
-          phoneNumber: driverPhoneNumber,
-          vehicleType: driverVehicleType,
-          vehiclePlate: driverVehiclePlate,
-          role: 'DRIVER',
-        });
-      } else {
-        await api.post('/api/auth/register-restaurant', {
-          restaurantName,
-          description: restaurantDescription || null,
-          phoneNumber: restaurantPhone,
-          restaurantEmail,
-          address: restaurantAddress,
-          city: restaurantCity || null,
-          country: restaurantCountry || null,
-          adminEmail,
-          adminPassword,
-          adminFirstName,
-          adminLastName,
-        });
-      }
-
-      setSuccess('Compte cree avec succes. Vous pouvez maintenant vous connecter.');
-      setTimeout(() => {
-        navigate('/login', {
-          replace: true,
-          state: { registrationSuccess: true },
-        });
-      }, 900);
+      const request: RegisterDriverRequest = {
+        email: values.email.trim(),
+        password: values.password,
+        firstName: values.firstName.trim(),
+        lastName: values.lastName.trim(),
+        phoneNumber: values.phoneNumber.trim(),
+        vehicleType: values.vehicleType,
+        vehiclePlate: values.vehiclePlate.trim().toUpperCase(),
+        role: 'DRIVER',
+      };
+      const { data } = await api.post<User>('/api/auth/register', request);
+      setCreatedEmail(data?.email ?? request.email);
     } catch (err) {
-      setError(extractErrorMessage(err));
+      const parsed = parseApiError(err, 'Inscription impossible pour le moment.');
+      setErrors(parsed.fieldErrors as Errors);
+      setError(parsed.message);
     } finally {
       setLoading(false);
     }
   };
 
+  const field = (key: keyof Values, label: string, type = 'text', className = '') => (
+    <div className={className}>
+      <label htmlFor={`register-${key}`} className="font-semibold mb-1 text-[#333] block">{label}</label>
+      <input
+        id={`register-${key}`}
+        type={type}
+        value={values[key]}
+        onChange={(event) => update(key, event.target.value)}
+        aria-invalid={Boolean(errors[key])}
+        className={inputClass(Boolean(errors[key]))}
+      />
+      {errors[key] ? <p className="mt-1 text-xs text-red-600">{errors[key]}</p> : null}
+    </div>
+  );
+
+  if (createdEmail) {
+    return (
+      <div className="min-h-screen bg-[#FFFAFA] flex items-center justify-center px-4 py-8">
+        <div role="status" className="w-full max-w-[520px] rounded-2xl border border-gray-200 bg-white shadow-sm p-6 md:p-8 text-center">
+          <h1 className="text-[22px] font-bold text-black mb-3">Compte créé — en attente de validation par l’administrateur</h1>
+          <p className="text-sm text-gray-600">
+            Votre compte chauffeur <strong>{createdEmail}</strong> a bien été enregistré. Vous pourrez vous connecter
+            dès qu’un administrateur l’aura validé.
+          </p>
+          <Link to="/login" className="mt-6 inline-block rounded-lg bg-black px-6 py-3 font-bold text-white hover:bg-gray-800">
+            Retour à la connexion
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#FFFAFA] flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-[620px] rounded-2xl border border-gray-200 bg-white shadow-sm p-6 md:p-8">
-        <h1 className="text-[24px] font-bold text-black mb-2">Créer un compte</h1>
-        <p className="text-sm text-gray-600 mb-6">ROBUST DELIVERY PLATFORM (RDP)</p>
+        <h1 className="text-[24px] font-bold text-black mb-2">Devenir chauffeur</h1>
+        <p className="text-sm text-gray-600 mb-6">
+          ROBUST DELIVERY PLATFORM (RDP) — inscription réservée aux chauffeurs. Vous êtes un restaurant ? Contactez-nous,
+          votre compte est créé par notre équipe.
+        </p>
 
-        {error ? <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div> : null}
-        {success ? <div className="mb-4 p-3 bg-emerald-100 text-emerald-700 rounded-lg text-sm">{success}</div> : null}
+        {error ? <div role="alert" className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div> : null}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label className="font-semibold mb-1 text-[#333] block">Rôle du compte</label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as RegistrationRole)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-            >
-              <option value="DRIVER">Driver</option>
-              <option value="RESTAURANT">Restaurant</option>
-            </select>
+        <form onSubmit={handleSubmit} noValidate className="space-y-5" aria-label="Inscription chauffeur">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {field('firstName', 'Prénom')}
+            {field('lastName', 'Nom')}
+            {field('email', 'Email', 'email', 'md:col-span-2')}
+            {field('password', 'Mot de passe (8 caractères min.)', 'password', 'md:col-span-2')}
+            {field('phoneNumber', 'Téléphone', 'tel')}
+            <div>
+              <label htmlFor="register-vehicleType" className="font-semibold mb-1 text-[#333] block">Type de véhicule</label>
+              <select
+                id="register-vehicleType"
+                value={values.vehicleType}
+                onChange={(event) => update('vehicleType', event.target.value)}
+                aria-invalid={Boolean(errors.vehicleType)}
+                className={inputClass(Boolean(errors.vehicleType))}
+              >
+                <option value="">Choisir…</option>
+                {VEHICLE_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
+              </select>
+              {errors.vehicleType ? <p className="mt-1 text-xs text-red-600">{errors.vehicleType}</p> : null}
+            </div>
+            {field('vehiclePlate', 'Plaque du véhicule', 'text', 'md:col-span-2')}
           </div>
-
-          {role === 'DRIVER' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="font-semibold mb-1 text-[#333] block">Prénom</label>
-                <input
-                  type="text"
-                  value={driverFirstName}
-                  onChange={(e) => setDriverFirstName(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div>
-                <label className="font-semibold mb-1 text-[#333] block">Nom</label>
-                <input
-                  type="text"
-                  value={driverLastName}
-                  onChange={(e) => setDriverLastName(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="font-semibold mb-1 text-[#333] block">Email</label>
-                <input
-                  type="email"
-                  value={driverEmail}
-                  onChange={(e) => setDriverEmail(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="font-semibold mb-1 text-[#333] block">Mot de passe</label>
-                <input
-                  type="password"
-                  value={driverPassword}
-                  onChange={(e) => setDriverPassword(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div>
-                <label className="font-semibold mb-1 text-[#333] block">Téléphone</label>
-                <input
-                  type="text"
-                  value={driverPhoneNumber}
-                  onChange={(e) => setDriverPhoneNumber(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div>
-                <label className="font-semibold mb-1 text-[#333] block">Type de véhicule</label>
-                <input
-                  type="text"
-                  value={driverVehicleType}
-                  onChange={(e) => setDriverVehicleType(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="font-semibold mb-1 text-[#333] block">Plaque du véhicule</label>
-                <input
-                  type="text"
-                  value={driverVehiclePlate}
-                  onChange={(e) => setDriverVehiclePlate(e.target.value)}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  required
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="font-semibold mb-1 text-[#333] block">Nom du restaurant</label>
-                  <input
-                    type="text"
-                    value={restaurantName}
-                    onChange={(e) => setRestaurantName(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                    required
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="font-semibold mb-1 text-[#333] block">Description (optionnelle)</label>
-                  <textarea
-                    value={restaurantDescription}
-                    onChange={(e) => setRestaurantDescription(e.target.value)}
-                    rows={3}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold mb-1 text-[#333] block">Téléphone</label>
-                  <input
-                    type="text"
-                    value={restaurantPhone}
-                    onChange={(e) => setRestaurantPhone(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold mb-1 text-[#333] block">Email restaurant</label>
-                  <input
-                    type="email"
-                    value={restaurantEmail}
-                    onChange={(e) => setRestaurantEmail(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                    required
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="font-semibold mb-1 text-[#333] block">Adresse</label>
-                  <input
-                    type="text"
-                    value={restaurantAddress}
-                    onChange={(e) => setRestaurantAddress(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold mb-1 text-[#333] block">Ville (optionnelle)</label>
-                  <input
-                    type="text"
-                    value={restaurantCity}
-                    onChange={(e) => setRestaurantCity(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  />
-                </div>
-                <div>
-                  <label className="font-semibold mb-1 text-[#333] block">Pays (optionnel)</label>
-                  <input
-                    type="text"
-                    value={restaurantCountry}
-                    onChange={(e) => setRestaurantCountry(e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-1">
-                <p className="font-bold text-black mb-3">Administrateur du restaurant</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-semibold mb-1 text-[#333] block">Prénom admin</label>
-                    <input
-                      type="text"
-                      value={adminFirstName}
-                      onChange={(e) => setAdminFirstName(e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="font-semibold mb-1 text-[#333] block">Nom admin</label>
-                    <input
-                      type="text"
-                      value={adminLastName}
-                      onChange={(e) => setAdminLastName(e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                      required
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="font-semibold mb-1 text-[#333] block">Email admin</label>
-                    <input
-                      type="email"
-                      value={adminEmail}
-                      onChange={(e) => setAdminEmail(e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                      required
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="font-semibold mb-1 text-[#333] block">Mot de passe admin</label>
-                    <input
-                      type="password"
-                      value={adminPassword}
-                      onChange={(e) => setAdminPassword(e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
-                      required
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
           <button
             type="submit"
             disabled={loading}
             className="w-full bg-black text-white p-4 rounded-lg font-bold hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
-            {loading ? 'Inscription en cours...' : 'CRÉER LE COMPTE'}
+            {loading ? 'Inscription en cours...' : 'CRÉER MON COMPTE CHAUFFEUR'}
           </button>
         </form>
 
