@@ -7,3 +7,9 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
+    routes:
+      # SPA fallback so client routes such as /login and /driver load on refresh
+      # and after the 401 redirect.
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -29,3 +29,23 @@ api.interceptors.request.use(
   },
   (error) => Promise.reject(error)
 );
+
+const LOGIN_PATH = '/login';
+
+const isAuthEndpoint = (url?: string) => Boolean(url && url.includes('/api/auth/'));
+
+// On 401 (expired/revoked token), clear the session and send the user back to /login.
+// Login/register calls are excluded so a wrong password still shows its own error.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+      const hadSession = Boolean(useAuthStore.getState().token);
+      useAuthStore.getState().logout();
+      if (hadSession && typeof window !== 'undefined' && window.location.pathname !== LOGIN_PATH) {
+        window.location.assign(LOGIN_PATH);
+      }
+    }
+    return Promise.reject(error);
+  }
+);

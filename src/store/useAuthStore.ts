@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isTokenExpired } from '../lib/jwt';
 
 interface User {
   id: number;
@@ -28,7 +29,13 @@ const getStoredAuth = (): Pick<AuthState, 'user' | 'token'> => {
   }
 
   try {
-    return JSON.parse(storedValue) as Pick<AuthState, 'user' | 'token'>;
+    const parsed = JSON.parse(storedValue) as Partial<Pick<AuthState, 'user' | 'token'>> | null;
+    // On app load, drop the persisted session if the JWT is missing, malformed or expired.
+    if (!parsed || typeof parsed.token !== 'string' || !parsed.user || isTokenExpired(parsed.token)) {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      return { user: null, token: null };
+    }
+    return { user: parsed.user, token: parsed.token };
   } catch {
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
     return { user: null, token: null };

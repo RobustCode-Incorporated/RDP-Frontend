@@ -1,230 +1,87 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { RestaurantDashboard } from '../restaurant/RestaurantDashboard';
 import { DriverDashboard } from '../driver/DriverDashboard';
-import {
-  fetchRestaurantOrders,
-  readyRestaurantOrder,
-  fetchRestaurantOrderHistory,
-} from '../../api/restaurantApi';
-import {
-  completeDelivery,
-  fetchMyDeliveries,
-  pickupDelivery,
-  startDelivery,
-} from '../../api/driverApi';
+import { AdminDashboard } from '../admin/AdminDashboard';
+import { mockApi } from '../../test/mockApi';
+import { ASSIGNED_DRIVER, makeDelivery, makeDriver, makeRestaurant } from '../../test/fixtures';
+import type { Delivery } from '../../api/types';
+import { useAuthStore } from '../../store/useAuthStore';
+import { makeTestJwt } from '../../test/jwt';
 
-vi.mock('../../api/restaurantApi', () => ({
-  acceptRestaurantOrder: vi.fn(),
-  fetchRestaurantOrderHistory: vi.fn(),
-  fetchRestaurantOrders: vi.fn(),
-  readyRestaurantOrder: vi.fn(),
-  startPreparingRestaurantOrder: vi.fn(),
-}));
-
-vi.mock('../../api/driverApi', () => ({
-  completeDelivery: vi.fn(),
-  failDelivery: vi.fn(),
-  fetchMyDeliveries: vi.fn(),
-  pickupDelivery: vi.fn(),
-  startDelivery: vi.fn(),
-}));
-
-const mockedFetchRestaurantOrders = vi.mocked(fetchRestaurantOrders);
-const mockedReadyRestaurantOrder = vi.mocked(readyRestaurantOrder);
-const mockedFetchRestaurantOrderHistory = vi.mocked(fetchRestaurantOrderHistory);
-
-const mockedFetchMyDeliveries = vi.mocked(fetchMyDeliveries);
-const mockedPickupDelivery = vi.mocked(pickupDelivery);
-const mockedStartDelivery = vi.mocked(startDelivery);
-const mockedCompleteDelivery = vi.mocked(completeDelivery);
-
-describe('Restaurant -> Driver lifecycle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('covers restaurant handoff and driver pickup/transit/delivery transitions', async () => {
+/**
+ * End-to-end flow against an in-memory "server": restaurant creates -> marks ready,
+ * admin assigns a driver, driver picks up / starts / delivers, restaurant sees DELIVERED.
+ */
+describe('Restaurant -> Admin -> Driver lifecycle', () => {
+  it('covers creation, ready, assignment and the driver transitions', async () => {
     const user = userEvent.setup();
+    let delivery: Delivery | null = null;
+    const bump = (patch: Partial<Delivery>) => {
+      delivery = { ...(delivery as Delivery), ...patch, version: (delivery as Delivery).version + 1 };
+      return delivery;
+    };
 
-    mockedFetchRestaurantOrders
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          restaurantId: 10,
-          customerId: 401,
-          driverId: 11,
-          status: 'PREPARING',
-          totalAmount: '22000',
-          createdAt: '2026-07-15T09:00:00',
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          restaurantId: 10,
-          customerId: 401,
-          driverId: 11,
-          status: 'READY_FOR_PICKUP',
-          totalAmount: '22000',
-          createdAt: '2026-07-15T09:00:00',
-        },
-      ]);
+    const apiMock = mockApi()
+      .on('GET', '/api/restaurants/me', makeRestaurant())
+      .on('GET', '/api/restaurants', [makeRestaurant()])
+      .on('GET', /^\/api\/admin\/users/, [])
+      .on('GET', '/api/drivers', [makeDriver()])
+      .on('GET', '/api/drivers/available', [makeDriver()])
+      .on('GET', /^\/api\/deliveries\/\d+\/history$/, [])
+      .on('GET', /^\/api\/deliveries(\?|$)/, ({ url }) =>
+        delivery && url.includes(`status=${delivery.status}`) ? [delivery] : [])
+      .on('GET', '/api/deliveries/me', () => (delivery ? [delivery] : []))
+      .on('POST', '/api/deliveries', ({ body }) => {
+        delivery = makeDelivery({ id: 9201, status: 'CREATED', version: 0, ...(body as Partial<Delivery>) });
+        return delivery;
+      })
+      .on('PATCH', '/api/deliveries/9201/ready', () => bump({ readyAt: new Date().toISOString() }))
+      .on('PUT', '/api/deliveries/9201/assign', () => bump({ status: 'ASSIGNED', driver: ASSIGNED_DRIVER }))
+      .on('PUT', '/api/deliveries/9201/pickup', () => bump({ status: 'PICKED_UP' }))
+      .on('PUT', '/api/deliveries/9201/start', () => bump({ status: 'IN_TRANSIT' }))
+      .on('PUT', '/api/deliveries/9201/complete', () => bump({ status: 'DELIVERED' }));
 
-    mockedFetchRestaurantOrderHistory.mockResolvedValue([
-      {
-        id: 1,
-        oldStatus: null,
-        newStatus: 'PENDING',
-        changedBy: 'restaurant@demo.com',
-        createdAt: '2026-07-15T09:00:00',
-      },
-    ]);
-
-    mockedReadyRestaurantOrder.mockResolvedValue({
-      id: 9201,
-      restaurantId: 10,
-      customerId: 401,
-      driverId: 11,
-      status: 'READY_FOR_PICKUP',
-      totalAmount: '22000',
-      createdAt: '2026-07-15T09:00:00',
-    });
-
-    const restaurantView = render(
-      <MemoryRouter initialEntries={['/restaurant']}>
-        <RestaurantDashboard />
-      </MemoryRouter>
-    );
-
-    await screen.findByText('Commande #9201');
-    await user.click(screen.getByRole('button', { name: /Commande #9201/i }));
-    await user.click(screen.getByRole('button', { name: 'Marquer prête' }));
-
-    await waitFor(() => {
-      expect(mockedReadyRestaurantOrder).toHaveBeenCalledWith(9201);
-    });
-
-    expect(await screen.findByText('La commande a été mise à jour avec succès.')).toBeInTheDocument();
+    // 1. Restaurant creates a prepaid delivery and marks it ready.
+    const restaurantView = render(<MemoryRouter><RestaurantDashboard /></MemoryRouter>);
+    const form = await screen.findByRole('form', { name: 'Nouvelle livraison' });
+    await user.type(within(form).getByLabelText(/Nom du client/), 'Mariam K.');
+    await user.type(within(form).getByLabelText(/Téléphone du client/), '0470 11 22 33');
+    await user.type(within(form).getByRole('combobox', { name: /Adresse de livraison/ }), 'Rue Haute 5, Bruxelles');
+    await user.click(within(form).getByLabelText('Prépayée'));
+    await user.click(within(form).getByRole('button', { name: 'Créer la livraison' }));
+    const card = await screen.findByRole('listitem', { name: 'Livraison #9201' });
+    await user.click(within(card).getByRole('button', { name: 'Commande prête' }));
+    expect(await within(card).findByText('Prête au retrait')).toBeInTheDocument();
     restaurantView.unmount();
 
-    mockedFetchMyDeliveries
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          pickupAddress: 'Restaurant Centre - Plateau',
-          deliveryAddress: 'Cocody Angré 8e tranche',
-          description: 'Livraison commande #9201',
-          status: 'ASSIGNED',
-          createdAt: '2026-07-15T09:02:00',
-          updatedAt: null,
-          restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-          customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-          driver: { id: 11 },
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          pickupAddress: 'Restaurant Centre - Plateau',
-          deliveryAddress: 'Cocody Angré 8e tranche',
-          description: 'Livraison commande #9201',
-          status: 'PICKED_UP',
-          createdAt: '2026-07-15T09:02:00',
-          updatedAt: '2026-07-15T09:10:00',
-          restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-          customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-          driver: { id: 11 },
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          pickupAddress: 'Restaurant Centre - Plateau',
-          deliveryAddress: 'Cocody Angré 8e tranche',
-          description: 'Livraison commande #9201',
-          status: 'IN_TRANSIT',
-          createdAt: '2026-07-15T09:02:00',
-          updatedAt: '2026-07-15T09:15:00',
-          restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-          customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-          driver: { id: 11 },
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 9201,
-          pickupAddress: 'Restaurant Centre - Plateau',
-          deliveryAddress: 'Cocody Angré 8e tranche',
-          description: 'Livraison commande #9201',
-          status: 'DELIVERED',
-          createdAt: '2026-07-15T09:02:00',
-          updatedAt: '2026-07-15T09:22:00',
-          restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-          customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-          driver: { id: 11 },
-        },
-      ]);
+    // 2. Admin assigns the available driver from the dispatch queue.
+    useAuthStore.getState().setAuth({ id: 1, email: 'admin@test.be', role: 'ADMIN' }, makeTestJwt(3600));
+    const adminView = render(<MemoryRouter><AdminDashboard /></MemoryRouter>);
+    const queueItem = await screen.findByRole('listitem', { name: /Livraison #9201/ });
+    await user.click(within(queueItem).getByRole('button', { name: 'Assigner' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(await within(dialog).findByRole('button', { name: /Assigner Dan Driver/ }));
+    await waitFor(() => expect(apiMock.callsTo('PUT', '/api/deliveries/9201/assign')[0]?.body).toEqual({ driverId: 4 }));
+    adminView.unmount();
+    useAuthStore.getState().logout();
 
-    mockedPickupDelivery.mockResolvedValue({
-      id: 9201,
-      pickupAddress: 'Restaurant Centre - Plateau',
-      deliveryAddress: 'Cocody Angré 8e tranche',
-      description: 'Livraison commande #9201',
-      status: 'PICKED_UP',
-      createdAt: '2026-07-15T09:02:00',
-      updatedAt: '2026-07-15T09:10:00',
-      restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-      customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-      driver: { id: 11 },
-    });
+    // 3. Driver picks up, starts and completes.
+    const driverView = render(<MemoryRouter><DriverDashboard /></MemoryRouter>);
+    await user.click(await screen.findByRole('button', { name: /Livraison #9201/ }));
+    const driverDialog = screen.getByRole('dialog');
+    await user.click(within(driverDialog).getByRole('button', { name: 'Marquer comme récupérée' }));
+    await user.click(await within(driverDialog).findByRole('button', { name: 'Démarrer la livraison' }));
+    await user.click(await within(driverDialog).findByRole('button', { name: 'Marquer livrée' }));
+    await waitFor(() => expect(delivery?.status).toBe('DELIVERED'));
+    driverView.unmount();
 
-    mockedStartDelivery.mockResolvedValue({
-      id: 9201,
-      pickupAddress: 'Restaurant Centre - Plateau',
-      deliveryAddress: 'Cocody Angré 8e tranche',
-      description: 'Livraison commande #9201',
-      status: 'IN_TRANSIT',
-      createdAt: '2026-07-15T09:02:00',
-      updatedAt: '2026-07-15T09:15:00',
-      restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-      customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-      driver: { id: 11 },
-    });
-
-    mockedCompleteDelivery.mockResolvedValue({
-      id: 9201,
-      pickupAddress: 'Restaurant Centre - Plateau',
-      deliveryAddress: 'Cocody Angré 8e tranche',
-      description: 'Livraison commande #9201',
-      status: 'DELIVERED',
-      createdAt: '2026-07-15T09:02:00',
-      updatedAt: '2026-07-15T09:22:00',
-      restaurant: { id: 10, name: 'Au Bois d’Ébène - Centre', address: 'Plateau' },
-      customer: { id: 401, firstName: 'Mariam', lastName: 'K.', email: 'mariam@example.com' },
-      driver: { id: 11 },
-    });
-
-    render(
-      <MemoryRouter initialEntries={['/driver']}>
-        <DriverDashboard />
-      </MemoryRouter>
-    );
-
-    await screen.findByText('Livraison #9201');
-    await user.click(screen.getByRole('button', { name: /Livraison #9201/i }));
-
-    await user.click(screen.getByRole('button', { name: 'Marquer comme récupérée' }));
-    await waitFor(() => expect(mockedPickupDelivery).toHaveBeenCalledWith(9201));
-
-    await user.click(screen.getByRole('button', { name: 'Démarrer la livraison' }));
-    await waitFor(() => expect(mockedStartDelivery).toHaveBeenCalledWith(9201));
-
-    await user.click(screen.getByRole('button', { name: 'Marquer livrée' }));
-    await waitFor(() => expect(mockedCompleteDelivery).toHaveBeenCalledWith(9201));
-
-    expect(await screen.findByText('La livraison a été mise à jour avec succès.')).toBeInTheDocument();
+    // 4. Restaurant sees it in "Terminées".
+    render(<MemoryRouter><RestaurantDashboard /></MemoryRouter>);
+    await user.click(await screen.findByRole('tab', { name: 'Terminées' }));
+    const done = await screen.findByRole('listitem', { name: 'Livraison #9201' });
+    expect(within(done).getByText('Livrée')).toBeInTheDocument();
   });
 });

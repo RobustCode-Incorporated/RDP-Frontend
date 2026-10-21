@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { ToastContext, type ToastApi } from './toastContext';
 
 type ToastVariant = 'success' | 'error' | 'info';
 
@@ -7,20 +8,6 @@ type Toast = {
   message: string;
   variant: ToastVariant;
 };
-
-type ToastApi = {
-  success: (message: string) => void;
-  error: (message: string) => void;
-  info: (message: string) => void;
-};
-
-const noop = () => {};
-
-const ToastContext = createContext<ToastApi>({
-  success: noop,
-  error: noop,
-  info: noop,
-});
 
 const variantClasses: Record<ToastVariant, string> = {
   success: 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -66,8 +53,4 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       </div>
     </ToastContext.Provider>
   );
-}
-
-export function useToast() {
-  return useContext(ToastContext);
 }

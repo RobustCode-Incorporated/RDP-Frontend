@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
+import { homePathForRole } from './homePath';
 
 export function RoleRedirect() {
   const { user, token } = useAuthStore();
@@ -8,13 +9,5 @@ export function RoleRedirect() {
     return <Navigate to="/login" replace />;
   }
 
-  if (user.role === 'ADMIN') {
-    return <Navigate to="/admin" replace />;
-  }
-
-  if (user.role === 'DRIVER') {
-    return <Navigate to="/driver" replace />;
-  }
-
-  return <Navigate to="/restaurant" replace />;
+  return <Navigate to={homePathForRole(user.role)} replace />;
 }
